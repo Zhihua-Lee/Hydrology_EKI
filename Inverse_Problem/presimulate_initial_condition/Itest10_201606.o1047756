@@ -1,0 +1,59 @@
+Running on host: argon-itf-bx49-07.hpc.
+In directory: /Users/zli333/DA/2025_EKI/Inverse_Problem/presimulate_initial_condition
+Starting on: Wed Mar 26 14:54:54 CDT 2025
+Running "module reset". Resetting modules to system default. The following $MODULEPATH directories have been removed: None
+
+Beginning initialization...
+*****************************
+Reading global file...
+Loading network...
+Partitioning network...
+Loading parameters...
+Reading dam and reservoir data...
+Setting up numerical error data...
+Initializing model...
+Loading initial conditions...
+Loading forcings...
+Loading output data information...
+Finalizing network...
+Calculating initial step sizes...
+
+Model type is 602.
+Process 27 (28 total) is good to go with 4134 links.
+Process 0 (28 total) is good to go with 5000 links.
+Process 2 (28 total) is good to go with 4082 links.
+Process 7 (28 total) is good to go with 4459 links.
+Process 8 (28 total) is good to go with 4065 links.
+Process 9 (28 total) is good to go with 4081 links.
+Process 10 (28 total) is good to go with 4095 links.
+Process 11 (28 total) is good to go with 4131 links.
+Process 12 (28 total) is good to go with 4323 links.
+Process 14 (28 total) is good to go with 4256 links.
+Process 15 (28 total) is good to go with 4076 links.
+Process 16 (28 total) is good to go with 4402 links.
+Process 18 (28 total) is good to go with 3901 links.
+Process 19 (28 total) is good to go with 4210 links.
+Process 20 (28 total) is good to go with 4121 links.
+Process 21 (28 total) is good to go with 4219 links.
+Process 22 (28 total) is good to go with 4049 links.
+Process 23 (28 total) is good to go with 4291 links.
+Process 24 (28 total) is good to go with 4039 links.
+Process 25 (28 total) is good to go with 4134 links.
+Process 26 (28 total) is good to go with 4175 links.
+Process 1 (28 total) is good to go with 3981 links.
+Process 3 (28 total) is good to go with 4158 links.
+Process 4 (28 total) is good to go with 4125 links.
+Process 5 (28 total) is good to go with 3994 links.
+Process 6 (28 total) is good to go with 4187 links.
+Process 13 (28 total) is good to go with 3919 links.
+Process 17 (28 total) is good to go with 4172 links.
+Finished initialization. Total time for initialization: 2.420002
+
+
+Computing solution at each link...
+************************************
+
+
+Computations complete. Total time for calculations: 1438.963398
+[0]: Error opening file /Users/zli333/DA/2025_EKI/Inverse_Problem/presimulate_initial_condition/rec/2016010100_2021080100.rec.
+[0]: Error opening outputfile /Users/zli333/DA/2025_EKI/Inverse_Problem/presimulate_initial_condition/dats/2016010100_2021080100.dat.
