@@ -1,0 +1,90 @@
+%Model UID
+602
+
+%Begin and end date time
+2021-08-01 00:00
+2021-09-01 23:00
+
+0	%Parameters to filenames
+
+%Components to print
+1
+State0
+
+%Peakflow function
+Classic
+
+%Global parameters
+%9 v_0   lambda_1 lambda_2 Hu(mm)   infil(mm/hr) perc(mm/hr)  res_surf[minutes]  res_subsurf[days]  res_gw[days]
+11 1 50 3 1 20 35 0 5 0 20 1.0
+
+%No. steps stored at each link and
+%Max no. steps transfered between procs
+%Discontinuity buffer size
+30 10 30
+
+%Topology (0 = .rvr, 1 = database)
+0 /Users/zli333/DA/Zhihua/hlm_data/base_data/sangamon.rvr
+
+%DEM Parameters (0 = .prm, 1 = database)
+0 /Users/zli333/DA/Zhihua/hlm_data/base_data/sangamon_v6.prm
+
+%Initial state (0 = .ini, 1 = .uini, 2 = .rec, 3 = .dbc, 3 = .h5)
+1 /Users/zli333/DA/Zhihua/hlm_data/base_data/initial602.uini
+
+%Forcings (0 = none, 1 = .str, 2 = binary, 3 = database, 4 = .ustr, 5 = forecasting, 6 = .gz binary, 7 = recurring)
+3
+
+%Rain
+5 /Users/zli333/DA/Sangamon_river/MRMS/2021/
+10 60 1627794000 1630555200
+
+%Evaporation
+7 /Users/zli333/DA/Zhihua/hlm_data/monthly/modis_2021.mon
+  1627794000 1630555200
+
+%Temperature 
+7 /Users/zli333/DA/Zhihua/hlm_data/monthly/temperature.mon
+  1627794000 1630555200
+
+%Dam (0 = no dam, 1 = .dam, 2 = .qvs)
+0
+
+%Reservoir ids (0 = no reservoirs, 1 = .rsv, 2 = .dbc file)
+0
+
+%Where to put write hydrographs
+%(0 = no output, 1 = .dat file, 2 = .csv file, 3 = database, 5 = .h5)
+1 60 /Users/zli333/DA/Zhihua/hlm_runs/test10/dats/2021080100_2021090123.dat
+
+%Where to put peakflow data
+%(0 = no output, 1 = .pea file, 2 = database)
+0 
+
+%.sav files for hydrographs and peak file
+%(0 = save no data, 1 = .sav file, 2 = .dbc file, 3 = all links)
+1 /Users/zli333/DA/Zhihua/hlm_data/base_data/sangamon.sav
+3
+
+%Snapshot information (0 = none, 1 = .rec, 2 = database, 3 = .h5, 4 = recurrent .h5)
+1  /Users/zli333/DA/Zhihua/hlm_runs/test10/states/2021080100_2021090123.rec
+
+%Filename for scratch work
+/nfsscratch/Users/zli333/test10/
+
+%Numerical solver settings follow
+
+%facmin, facmax, fac
+.1 10.0 .9
+
+%Solver flag (0 = data below, 1 = .rkd)
+0
+%Numerical solver index (0-3 explicit, 4 implicit)
+2
+%Error tolerances (abs, rel, abs dense, rel dense)
+1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+
+# %End of file
