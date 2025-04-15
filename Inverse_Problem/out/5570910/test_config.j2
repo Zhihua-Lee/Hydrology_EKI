@@ -1,0 +1,99 @@
+{###################################################
+                     Section: EKI                 
+###################################################}
+
+# EKI Simulated Experiment Settings
+{% set using_simulated_data = True %} # to activate the if sentence below
+using_simulated_data: {{using_simulated_data}}               # loading simulated initial_data(condition), rainfall_data and hydrograph observations, in which case known Cr -> rainfall_data(Cr) + initial_data -> hydrograph(Cr) 
+{% if using_simulated_data %}
+Cr_ref: 1.5                              # The "true" scaling factor that is imposed on the given rainfall_data in the simulated experiment, then the scaled rainfall_data will be input into the system as observation, to infer the true Cr_ref
+{% endif %}
+
+# EKI Evolution Model Parameter Settings
+      # prm_dist: Distribution flags for parameters ("True" enables distribution assumption)
+      # prm_lb: Parameter lower bounds
+      # prm_ub: Parameter upper bounds
+      # prm_std: Standard deviations in latent variable space for perturbation scaling
+prm_dist: ["False", "False", "False", "False", "False", "False", "False", "False", "False", "False", "False", "False", "True"]
+prm_lb: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05]
+prm_ub: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 7.0] # the distribution of ensembles is dependent on the bounds ???
+prm_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # what is the best choice of std ???
+
+# EKI Observation Processing Parameters
+{% set meas_usgs_location = "5570910" %}
+{# {% set meas_usgs_location = "5578100" %} #}
+{# {% set meas_usgs_location = "5582000" %} #}
+{# {% set meas_usgs_location = "5583000" %} #}
+meas_usgs: "{{ meas_usgs_location }}"     # USGS observation station gauge ID chosen for feedback in EKI algorithm (must be stored as string to prevent numeric conversion)
+plot_usgs: [                              # USGS observation station gauge ID for plotting hydrographs (verification of EKI)
+  "5570910", "5578100", "5578000", "5579630", "5576500", "5580950", "5577500", "5576250",
+  "5576000", "5580000", "5582000", "5576193", "5583000", "5570910", "5578250", "5576090",
+  "5573540", "5578500", "5579725", "5579500", "5572000"
+]
+
+meas_type: metric                         # Observation type: 'metric', 'thresh', or 'none'
+thresh_val: 0                             # Threshold value (observations below this are ignored when using threshold-based processing)
+abs_std_meas: 1000.0                      # Absolute standard deviation of observations
+rel_std_meas: 0.0                         # Relative standard deviation of observations
+
+# EKI Algorithm Parameters
+steps: 10                                 # Number of EKI assimilation steps
+num_ensembles: 100                        # Number of EKI ensembles
+
+# EKI parameter inheritage / Watershed Configuration
+watershed_csv: null                                # Watershed division CSV ??? this will be None in python
+watershed_depth: 8                                 # Watershed depth (e.g., Horton order) for local parameter adjustment ???
+
+{###################################################
+                     Section: HLM                  
+###################################################}
+
+# HML Solver Model Configuration
+model_num: '602'                                   # Model identifier indicating version (e.g., "609")
+time_start: 2021-08-01 00:00                       # Simulation/assimilation start time (format: "YYYY-MM-DD HH:MM")
+time_end: 2021-09-01 23:00                         # Simulation/assimilation end time (format: "YYYY-MM-DD HH:MM")
+
+# HLM Parallel simulation parameters
+parallel_argument: smp                             # option: 'orte', 'smp'
+num_parallel_slots: 8                              # number of slots assigned to each simulation(ensemble), 
+                                                   # small -> slow, big -> not accessible from Argon
+
+{% if using_simulated_data %}# using simulated data
+# HLM Forcing & Initial Data Paths
+rain_dir: "hlm_data/Simulated_data/Rainfall_Sangamon_river/"      # Rainfall data directory
+rvr: hlm_data/structure/sangamon.rvr                         # River network routing file (RVR)
+initial_uini: hlm_data/Simulated_data/initial602.uini             # Initial state file (UINI)
+{# initial_rec: presimulate_initial_condition/rec/2016010100_2021080100.rec                     # Initial state file (rec) #}
+prm: hlm_data/Simulated_data/presimulate_hydrograph/sangamon_v6.prm               # Parameter template file (PRM) to indicate which links are used in ODE solver
+evapo: hlm_data/Simulated_data/Temp&Evap_monthly/modis_2021.mon             # Monthly evaporation forcing file (MON)
+temp: hlm_data/Simulated_data/Temp&Evap_monthly/temperature.mon             # Monthly temperature forcing file (MON)  
+
+# Data Assimilation Observation Data Paths
+meas_series: hlm_data/Simulated_data/presimulate_hydrograph/Cr_sim_data.csv       # Path to observation data file (reference data, all time, all gauges id), need to fill blanks with zero
+usgs_csv: hlm_data/structure/usgs_gauges_linked.csv          # CSV mapping USGS gauge stations to link IDs
+meas_sav: hlm_data/structure/gauges.sav                      # Gauges Link ids to indicate which gauges are accessible in meas_series csv above
+
+{% else %}# using sensor data
+# HLM Forcing & Initial Data Paths
+rain_dir: "hlm_data/Sensor_data/Rainfall_Sangamon_river/MRMS/2021/"       # Rainfall data directory
+rvr: hlm_data/structure/sangamon.rvr                         # River network routing file (RVR)
+initial_uini: hlm_data/Sensor_data/initial602.uini             # Initial state file (UINI)
+prm: hlm_data/parameter_templates/sangamon_v6.prm                      # Parameter template file (PRM) to indicate which links are used in ODE solver
+evapo: hlm_data/Sensor_data/Temp&Evap_monthly/modis_2021.mon             # Monthly evaporation forcing file (MON)
+temp: hlm_data/Sensor_data/Temp&Evap_monthly/temperature.mon             # Monthly temperature forcing file (MON)  
+
+# Data Assimilation Observation Data Paths
+meas_series: hlm_data/Sensor_data/usgs_hydrograph_all_time.csv       # Path to observation data file (reference data, all time, all gauges id), need to fill blanks with zero
+usgs_csv: hlm_data/structure/usgs_gauges_linked.csv          # CSV mapping USGS gauge stations to link IDs
+meas_sav: hlm_data/structure/gauges.sav                      # Gauges Link ids to indicate which gauges are accessible in meas_series csv above #}
+{% endif %}
+
+# Output & Temporary Paths (dynamically generated based on USGS station)
+out_dir: out/{{ meas_usgs_location }}/             # Output directory (auto-concatenated with USGS ID)
+tmp_dir: tmp/{{ meas_usgs_location }}/             # Temporary directory for intermediate files
+          
+
+
+
+
+
