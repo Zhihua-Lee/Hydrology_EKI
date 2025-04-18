@@ -44,12 +44,14 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
             
             # 2.2 If any files are missing or empty, print which ones and wait.
             if csv_missing_indices or csv_zero_size_indices:
-                print("Not finished, waiting 100 seconds")
-                if csv_missing_indices:
-                    print(f"  Missing CSV files for ensemble indices: {csv_missing_indices}")
-                if csv_zero_size_indices:
-                    print(f"  Empty CSV files for ensemble indices: {csv_zero_size_indices}")
-                time.sleep(100)
+                msg = (
+                    f"⏳ Waiting for ensembles... "
+                    f"Missing: {len(csv_missing_indices)} / {ens}, "
+                    f"Empty: {len(csv_zero_size_indices)} / {ens}"
+                )
+                sys.stdout.write("\r" + msg + " " * 10)  # clear previous line tail
+                sys.stdout.flush()
+                time.sleep(10)
                 continue
             
             # 2.3 Check that all files have the same size and are not all zero.
@@ -58,22 +60,24 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
             min_size = min(count_all)
             if (max_size - min_size) == 0:
                 if max_size == 0:
-                    # All files are empty.
-                    print("Not finished, all CSV files are zero-sized, waiting 100 seconds")
-                    time.sleep(100)
+                    sys.stdout.write("\r⏳ Waiting... All CSVs are zero-sized.           ")
+                    sys.stdout.flush()
+                    time.sleep(10)
                 else:
                     # All files exist, are non-empty, and sizes are consistent.
+                    print("\n✅ CSVs are ready.")
                     break
             else:
-                print("Not finished, file size mismatch among CSV files, waiting 100 seconds")
-                print(f"  File sizes: {count_all}")
-                time.sleep(100)
+                msg = f"⏳ Waiting... File size mismatch. Sizes: {count_all}"
+                sys.stdout.write("\r" + msg + " " * 10)
+                sys.stdout.flush()
+                time.sleep(10)
         
         except Exception as e:
-            print(f"Error while reading CSV files: {e}")
-            print("Not finished, waiting 100 seconds")
-            time.sleep(100)
-    
+            sys.stdout.write(f"\r❌ Error while reading CSV files: {e}. Retrying in 10s...     ")
+            sys.stdout.flush()
+            time.sleep(10)
+            
     # 3. Process the read data after successful retrieval:
     # 3.1 Remove the last column (bug associated with written csv file, extra empty column)
     read_values_fixed = [res[:, :-1] for res in read_values]
