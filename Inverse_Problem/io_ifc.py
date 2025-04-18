@@ -211,6 +211,60 @@ def create_prm(test_dict: dict, id_list: list, prm_array: np.ndarray, ens: int) 
 #         for line in new_lines:
 #             f.write("%s\n" % line)
 
+def update_prm_add_or_overwrite_cr(prm_file_path, cr_value):
+    """
+    Update a .prm file by setting the 13th parameter (Cr) for each link.
+    If a link already has 13 or more parameters, Cr is overwritten.
+    If it has only 12, Cr is appended.
+
+    Args:
+        prm_file_path (str): Full path to the .prm file.
+        cr_value (float or str): The Cr value to apply.
+    """
+    with open(prm_file_path, 'r') as f:
+        lines = f.readlines()
+
+    updated_lines = []
+    i = 0
+    n = len(lines)
+
+    # Preserve leading blank lines and the "total count" line
+    while i < n and lines[i].strip() == "":
+        updated_lines.append(lines[i])
+        i += 1
+    if i < n:
+        updated_lines.append(lines[i])
+        i += 1
+
+    # Each link has two lines: one for ID, one for parameters
+    while i < n:
+        # Skip blank lines between blocks
+        while i < n and lines[i].strip() == "":
+            updated_lines.append(lines[i])
+            i += 1
+        # Link ID line
+        if i < n:
+            updated_lines.append(lines[i])
+            i += 1
+        # Skip blank lines before parameter line
+        while i < n and lines[i].strip() == "":
+            updated_lines.append(lines[i])
+            i += 1
+        # Parameter line
+        if i < n:
+            tokens = lines[i].strip().split()
+            if len(tokens) >= 13:
+                tokens[12] = str(cr_value)
+            else:
+                tokens.append(str(cr_value))
+            updated_lines.append(" ".join(tokens) + "\n")
+            i += 1
+
+    with open(prm_file_path, 'w') as f:
+        f.writelines(updated_lines)
+    print(f"Updated {prm_file_path}: set Cr (param #13) to {cr_value} for all links.")
+
+
 def create_meas_sav(test_dict: dict, model_link_ids: list) -> None:
     """
     Create a filtered SAV file by mapping gauge IDs (from observation)

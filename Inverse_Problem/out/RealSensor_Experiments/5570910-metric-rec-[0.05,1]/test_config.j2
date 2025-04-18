@@ -1,0 +1,68 @@
+{###################################################
+                     Section: EKI                 
+###################################################}
+
+# EKI Evolution Model Parameter Settings
+      # prm_dist: Distribution flags for parameters ("True" enables distribution assumption)
+      # prm_lb: Parameter lower bounds
+      # prm_ub: Parameter upper bounds
+      # prm_std: Standard deviations in latent variable space for perturbation scaling
+prm_dist: ["False", "False", "False", "False", "False", "False", "False", "False", "False", "False", "False", "False", "True"]
+prm_lb: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05]
+prm_ub: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+prm_std: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# EKI Observation Processing Parameters
+{% set meas_usgs_location = "5570910" %}
+{# {% set meas_usgs_location = "5578100" %} #}
+meas_usgs: "{{ meas_usgs_location }}"     # USGS observation station gauge ID chosen for feedback in EKI algorithm (must be stored as string to prevent numeric conversion)
+meas_type: metric                         # Observation type: 'metric', 'thresh', or 'none'
+thresh_val: 0                             # Threshold value (observations below this are ignored when using threshold-based processing)
+abs_std_meas: 1000.0                      # Absolute standard deviation of observations
+rel_std_meas: 0.0                         # Relative standard deviation of observations
+
+# EKI Algorithm Parameters
+steps: 10                                 # Number of EKI assimilation steps
+num_ensembles: 100                        # Number of EKI ensembles
+
+# EKI parameter inheritage / Watershed Configuration
+watershed_csv: null                                # Watershed division CSV ??? this will be None in python
+watershed_depth: 8                                 # Watershed depth (e.g., Horton order) for local parameter adjustment ???
+
+{###################################################
+                     Section: HLM                  
+###################################################}
+
+# HML Solver Model Configuration
+model_num: '602'                                   # Model identifier indicating version (e.g., "609")
+time_start: 2021-08-01 00:00                       # Simulation/assimilation start time (format: "YYYY-MM-DD HH:MM")
+time_end: 2021-09-01 23:00                         # Simulation/assimilation end time (format: "YYYY-MM-DD HH:MM")
+
+# HLM Parallel simulation parameters
+parallel_argument: smp                             # option: 'orte', 'smp'
+num_parallel_slots: 8                              # number of slots assigned to each simulation(ensemble), 
+                                                   # small -> slow, big -> not accessible from Argon
+    
+# HLM Forcing & Initial Data Paths
+rain_dir: hlm_data/Sangamon_river/MRMS/2021/       # Rainfall data directory
+rvr: hlm_data/sangamon.rvr                         # River network routing file (RVR)
+uini: hlm_data/initial602.uini                     # Initial state file (UINI)
+initial_rec: presimulate_initial_condition/rec/2016010100_2021080100.rec                     # Initial state file (rec)
+prm: hlm_data/sangamon_v6.prm                      # Parameter template file (PRM) to indicate which links are used in ODE solver
+evapo: hlm_data/monthly/modis_2021.mon             # Monthly evaporation forcing file (MON)
+temp: hlm_data/monthly/temperature.mon             # Monthly temperature forcing file (MON)  
+
+# Data Assimilation Observation Data Paths
+meas_series: hlm_data/usgs_data_all_time.csv       # Path to observation data file (reference data, all time, all gauges id), need to fill blanks with zero
+usgs_csv: hlm_data/usgs_gauges_linked.csv          # CSV mapping USGS gauge stations to link IDs
+meas_sav: hlm_data/gauges.sav                      # Gauges Link ids to indicate which gauges are accessible in meas_series csv above
+
+# Output & Temporary Paths (dynamically generated based on USGS station)
+out_dir: out/{{ meas_usgs_location }}/             # Output directory (auto-concatenated with USGS ID)
+tmp_dir: tmp/{{ meas_usgs_location }}/             # Temporary directory for intermediate files
+          
+
+
+
+
+

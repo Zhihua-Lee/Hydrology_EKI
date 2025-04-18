@@ -2,11 +2,11 @@
 import sys
 import shutil
 import numpy as np
-import os
+import os, time
 
 from tqdm import tqdm
 from utils import process_yaml, get_ids, get_subwatershed
-from io_ifc import create_meas_sav, create_test_initial_condition, create_prm, create_gbl, create_batch_job_file, save_statistics_csv, save_particles
+from io_ifc import create_meas_sav, create_test_initial_condition, create_prm, create_gbl, create_batch_job_file, save_statistics_csv, save_particles, update_prm_add_or_overwrite_cr
 from eki import subsample_data, pert, EnKF_step
 from latent import create_latent, transform_latent
 from run import run_test
@@ -24,14 +24,49 @@ def main(yaml_name):
     step_num = test_dict['steps']
     ens = test_dict['num_ensembles']
 
-    # Get data file location, idx of locations, and standard deviation parameters
+    # Presimulate data if using_simulated_data
     using_simulated_data = test_dict['using_simulated_data']
     print("using_simulated_data: ",using_simulated_data)
     print("data from: ",test_dict['meas_series'])
-    # print(using_simulated_data)
-    # if using_simulated_data:
-    #     d
-    # else:
+    
+    if using_simulated_data:
+        Cr_ref = test_dict['Cr_ref']
+        update_prm_add_or_overwrite_cr(test_dict['prm'], Cr_ref)
+        output_csv = test_dict['meas_series']
+        sim_dir = os.path.join(os.path.dirname(test_dict['meas_series']), '')
+        # delete old Cr_sim_data.csv if it exists
+        if os.path.isfile(output_csv):
+            print(f"Removing old {output_csv}")
+            os.remove(output_csv)
+        # Submit the presim job using the 'presimulate_Cr.sh' script.
+        job_cmd = f"qsub {sim_dir}presimulate_Cr.sh"
+        print(job_cmd)
+        procs = os.system(job_cmd)
+        # wait for Cr_sim_data.csv to be generated as our simulated observation
+        while True:
+            try:
+                if os.path.isfile(output_csv):
+                    data = open(output_csv).read()
+                    if data.strip() != "":
+                        # clean the first two rows
+                        with open(output_csv, 'r') as f:
+                            lines = f.readlines()
+                        if len(lines) > 2:
+                            lines_trimmed = lines[2:]
+                            with open(output_csv, 'w') as f:
+                                f.writelines(lines_trimmed)
+                            print(f"Removed header lines from {output_csv}")
+                        print(f"File {output_csv} detected and non-empty. Proceeding...")
+                        break
+                    else:
+                        print(f"File {output_csv} exists but is empty. Waiting 10 seconds...")
+                else:
+                    print(f"Waiting for {output_csv} to appear...")
+            except Exception as e:
+                print(f"Error checking file: {e}")
+            time.sleep(10)
+    
+    # Get data file directory, idx of locations, and standard deviation parameters
     data_file = test_dict['meas_series']
     usgs_gauge_id = test_dict['meas_usgs'] # usgs gauge id for observation
     meas_std = test_dict['abs_std_meas']
