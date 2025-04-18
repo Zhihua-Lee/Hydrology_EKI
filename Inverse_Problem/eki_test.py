@@ -39,7 +39,7 @@ def main(yaml_name):
     # loading USGS mapping
     usgs_to_link_id, link_to_usgs_id, file_order = load_usgs_mapping(test_dict)
     
-    # Remove all temp files and copy yaml into out dir and tries to make output for csv and pickle outputs
+    # Remove all temp files and copy yaml(initial, forcing, meas_csv) into out dir and tries to make output for csv and pickle outputs
     # for f in os.listdir(tmp_dir):
     #     os.remove(os.path.join(tmp_dir,f))
     for root, dirs, files in os.walk(tmp_dir, topdown=False):
@@ -50,6 +50,8 @@ def main(yaml_name):
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
     shutil.copyfile(yaml_name, os.path.join(out_dir, 'test_config.j2'))
+    shutil.copy(test_dict['initial_uini'], out_dir) # keep the filename
+    shutil.copy(test_dict['meas_series'], out_dir) # keep the filename
     os.makedirs(out_dir + 'csv/', exist_ok=True)
     os.makedirs(out_dir + 'npy/', exist_ok=True)
     
@@ -60,6 +62,8 @@ def main(yaml_name):
     else:
         sparse_parent = get_subwatershed(test_dict, model_link_ids)
     latent_var = create_latent(test_dict, sparse_parent, ens) # initializing latent ensembles
+    # For parameters with `dist=True`, the original values in the template `.prm` are ignored and the values are generated entirely by mapping the latent variables into the specified bounds; 
+    # for parameters with `dist=False`, the original values from the template `.prm` are used unchanged.
     prm_ens, sorted_link_ids = transform_latent(test_dict, sparse_parent, latent_var)
 
     # Create(filtering based on lid) all necessary files for running tests

@@ -105,17 +105,17 @@ def transform_latent(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.
     with open(prm_name, 'r') as f:
         prm_lines = [line for line in f.readlines() if line.strip()]
     id_list_prm = [int(i.strip('\n')) for i in prm_lines[1::2]]
-    prm_list = np.array([[float(i) for i in line.strip('\n').split()] for line in prm_lines[2::2]])
+    prm_list = np.array([[float(i) for i in line.strip('\n').split()] for line in prm_lines[2::2]]) # shape: (link_num, TOTAL_PRM_NUM)
     
     # Sort by ascending ID number and get total IDs
     id_list_arg = np.argsort(id_list_prm)
-    prm_array = prm_list[id_list_arg,:]
+    prm_array = prm_list[id_list_arg,:] # sorted hlm prm_list, shape: (link_num, TOTAL_PRM_NUM)
     id_list = np.sort(id_list_prm)
     id_num = len(id_list)  
     ens = latent_var.shape[1]
    
     # Create a ensemble of parameter matricies
-    prm_ens = np.zeros((TOTAL_PRM_NUM,id_num,ens))
+    prm_ens = np.zeros((TOTAL_PRM_NUM,id_num,ens)) # EKI parameters, shape: (TOTAL_PRM_NUM,link_num,ens)
     out_num = sparse_parent.shape[0]
 
     # Get parameters for transformation
@@ -131,12 +131,17 @@ def transform_latent(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.
             ub = float(upper_bounds[i])
             
             # Convert from sparse to full space
-            lv = (sparse_parent.T)@latent_var[loc:(loc+out_num),:]
+            lv = (sparse_parent.T)@latent_var[loc:(loc+out_num),:] # shape: (out_num, ens).T * (id_num, out_num)
             
             #Apply transformation, and round to 5 digits (necessary for asynch, otherwise will fail)
-            transform_func = lambda x: float(np.format_float_positional(unbounded_to_bounded(x,lb,ub),precision=5,unique=False,fractional=False,trim='k'))  
+            transform_func = lambda x: float(
+                np.format_float_positional(
+                    unbounded_to_bounded(x, lb, ub), # using $\tanh$ like functions to map any real num x to [lb, ub]
+                    precision=5, unique=False, fractional=False, trim='k'
+                )
+            )
             vec_transform_func = np.vectorize(transform_func)
-            var_val = vec_transform_func(lv) 
+            var_val = vec_transform_func(lv)
 
             # NaN checking
             if np.isnan(var_val).any():

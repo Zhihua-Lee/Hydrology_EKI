@@ -157,7 +157,7 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, mea
         print(f"Animation saved to {gif_filepath}")
 
 # ===================== Parameter Evolution Plot Function =====================
-def plot_parameter_evolution(param_array, active_param_indices, param_labels, param_ranges, assimilation_phase, visual_output_dir, iter_range):
+def plot_parameter_evolution(param_array, active_param_indices, param_labels, param_ranges, assimilation_phase, visual_output_dir, iter_range, cr_ref=None):
     """
     Plot parameter evolution graphs and save ensemble and mean-std plots.
 
@@ -169,6 +169,7 @@ def plot_parameter_evolution(param_array, active_param_indices, param_labels, pa
       assimilation_phase: 'post' or 'prior'
       visual_output_dir: Top-level output directory (e.g., 'visualization')
       iter_range: Array of iteration indices
+      cr_ref: optional reference value to plot as a horizontal line.
     """
     param_ensemble_dir = os.path.join(visual_output_dir, assimilation_phase, "parameter", "ensemble")
     param_mean_std_dir = os.path.join(visual_output_dir, assimilation_phase, "parameter", "mean_std")
@@ -200,6 +201,9 @@ def plot_parameter_evolution(param_array, active_param_indices, param_labels, pa
             plt.plot(iter_range, param_mean, 'k-', lw=2, label='Mean')
             plt.fill_between(iter_range, param_mean - param_std, param_mean + param_std,
                              color='gray', alpha=0.3, label='Mean ± Std')
+            # **NEW**: overlay the Cr_ref line
+            if cr_ref is not None:
+                plt.axhline(cr_ref, color='red', linestyle='--', label='Cr_ref')
             plt.ylabel(param_labels[orig_idx])
             plt.xlabel('EKI Iterations')
             plt.ylim(*param_ranges[orig_idx])
@@ -271,6 +275,11 @@ def main_visualization(test_dict):
     end_time_str = test_dict["time_end"]
     time_axis = pd.date_range(start=start_time_str, end=end_time_str, freq='H')
     num_assimilation_steps = test_dict["steps"]
+    using_simulated_data = test_dict['using_simulated_data']
+    if using_simulated_data:
+        Cr_ref = test_dict['Cr_ref']
+    else:
+        Cr_ref = None
     # max_station_count = 5  # Default value if desired_usgs_ids not found
     
     # Retrieve desired gauge IDs from configuration; ensure it's a list.
@@ -307,7 +316,7 @@ def main_visualization(test_dict):
 
     # Parameter settings: assuming only one active parameter.
     param_labels = ["$Cr$"]
-    param_ranges = [[0.00, 1.0]]
+    param_ranges = [[0.00, 2.5]]
     active_param_indices = [0]
 
     assimilation_phases = ['prior', 'post']
@@ -331,7 +340,7 @@ def main_visualization(test_dict):
                                   observed_data_clean, time_axis,
                                   assimilation_phase='post', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
     plot_parameter_evolution(post_param_array, active_param_indices, param_labels, param_ranges,
-                             assimilation_phase='post', visual_output_dir=visual_output_dir, iter_range=iter_range_post)
+                             assimilation_phase='post', visual_output_dir=visual_output_dir, iter_range=iter_range_post, cr_ref=Cr_ref)
     plot_event_statistics('post', visual_output_dir, test_dict['out_dir'])
 
     # -------------------- Prior Assimilation (prior) --------------------
@@ -350,7 +359,7 @@ def main_visualization(test_dict):
                                   observed_data_clean, time_axis,
                                   assimilation_phase='prior', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
     plot_parameter_evolution(prior_param_array, active_param_indices, param_labels, param_ranges,
-                             assimilation_phase='prior', visual_output_dir=visual_output_dir, iter_range=iter_range_prior)
+                             assimilation_phase='prior', visual_output_dir=visual_output_dir, iter_range=iter_range_prior, cr_ref=Cr_ref)
     plot_event_statistics('prior', visual_output_dir, test_dict['out_dir'])
     
     plt.close('all')
