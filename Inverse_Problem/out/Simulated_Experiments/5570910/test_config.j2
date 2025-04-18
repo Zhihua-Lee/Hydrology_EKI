@@ -7,7 +7,7 @@
 using_simulated_data: {{using_simulated_data}}               # loading simulated initial_data(condition), rainfall_data and hydrograph observations, 
                                                              # in which case known Cr -> rainfall_data(Cr) + initial_data -> hydrograph(Cr) 
 {% if using_simulated_data %}
-Cr_ref: 1.5                              # The "true" scaling factor that is imposed on the given rainfall_data in the simulated experiment,
+Cr_ref: 1.0                              # The "true" scaling factor that is imposed on the given rainfall_data in the simulated experiment,
                                          # then the scaled rainfall_data will be input into the system as observation, to infer the true Cr_ref
 {% endif %}
 
