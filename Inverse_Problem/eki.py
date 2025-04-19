@@ -41,18 +41,21 @@ def pert(X, test_dict, sparse_parent):
     Perturb the latent parameter ensemble 'X' based on the given test dictionary and sparse parent matrix.
 
     Args:
-        X (np.ndarray): Latent parameter ensemble to be perturbed.
+        X (np.ndarray): Latent parameter ensemble to be perturbed. shape = (n_params, ensemble_size)
         test_dict (dict): Test dictionary containing required parameters.
         sparse_parent (coo_matrix): Sparse parent matrix.
 
     Returns:
         np.ndarray: Perturbed latent parameter ensemble 'X'.
     """
+    def str2bool(s):
+        return str(s).strip().lower() in ['true', '1', 'yes']
+    
     prm_lb = test_dict['prm_lb']
     prm_ub = test_dict['prm_ub']
     prm_std = test_dict['prm_std']
-    std_val = test_dict['rel_std_meas']
-    prm_dist = [json.loads(i.lower()) for i in test_dict["prm_dist"]]
+    # std_val = test_dict['rel_std_meas'] # not used here
+    prm_dist = [str2bool(i) for i in test_dict["prm_dist"]]
     parent_num = sparse_parent.shape[0]
     loc = 0
     ens = X.shape[1]
@@ -62,8 +65,8 @@ def pert(X, test_dict, sparse_parent):
             lb = float(prm_lb[i])
             ub = float(prm_ub[i])
             std = prm_std[i]
-            X[loc:loc+parent_num, :] += np.random.normal(0, std, (parent_num, ens))
-            std = (ub-lb) * prm_std[i]
+            # std = (ub-lb) * prm_std[i]
+            X[loc:loc+parent_num, :] += np.random.normal(0, std, (parent_num, ens)) # adding normal noise in latent space
             loc = loc + parent_num
     return X
 
@@ -419,11 +422,11 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
         np.ndarray: The updated ensemble of state vectors after the EnKF step.
     """
     
-    # If using threshold operator, just use values larger than thresh_val
+    # If using threshold operator, just use y values larger than thresh_val
     if test_dict["meas_type"] == 'thresh':
         thresh_val = test_dict['thresh_val']
-        idx_use = np.where(y > thresh_val)
-        thresh_idx = idx_use[0]
+        idx_use = np.where(y > thresh_val) # (N_use, 1)
+        thresh_idx = idx_use[0] # (N_use)
         y_use = y[thresh_idx, :]
         R_use = R[thresh_idx]
         Y_use = Y[thresh_idx, :]
@@ -445,7 +448,7 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
             X_post = EnKF(X, Y_use, y_use, R_use)
             # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
     
-    # Otherwise, just use standard EKI
+    # Otherwise (none), just use standard EKI
     else:
         X_post = EnKF(X, Y, y, R)
     return X_post

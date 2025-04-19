@@ -1,4 +1,4 @@
-import os
+import os, sys
 import numpy as np
 import time
 from typing import List, Tuple, Dict, Union
@@ -24,6 +24,7 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
     procs = os.system(job_cmd)
     
     # 2. Attempt to read result CSV files; if missing, empty, or mismatched, wait and retry.
+    start_time = time.time()
     while True:
         csv_missing_indices = []
         csv_zero_size_indices = []
@@ -43,9 +44,10 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
                 read_values.append(data_j)
             
             # 2.2 If any files are missing or empty, print which ones and wait.
+            elapsed = int(time.time() - start_time)
             if csv_missing_indices or csv_zero_size_indices:
                 msg = (
-                    f"⏳ Waiting for ensembles... "
+                    f"⏳ {elapsed}s elapsed: Waiting for ensembles... "
                     f"Missing: {len(csv_missing_indices)} / {ens}, "
                     f"Empty: {len(csv_zero_size_indices)} / {ens}"
                 )
@@ -60,15 +62,15 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
             min_size = min(count_all)
             if (max_size - min_size) == 0:
                 if max_size == 0:
-                    sys.stdout.write("\r⏳ Waiting... All CSVs are zero-sized.           ")
+                    sys.stdout.write("\r⏳ {elapsed}s elapsed: Waiting... All CSVs are zero-sized.           ")
                     sys.stdout.flush()
                     time.sleep(10)
                 else:
                     # All files exist, are non-empty, and sizes are consistent.
-                    print("\n✅ CSVs are ready.")
+                    print("\n✅ CSVs are ready after {elapsed} seconds.")
                     break
             else:
-                msg = f"⏳ Waiting... File size mismatch. Sizes: {count_all}"
+                msg = f"⏳ {elapsed}s elapsed: Waiting... File size mismatch. Sizes: {count_all}"
                 sys.stdout.write("\r" + msg + " " * 10)
                 sys.stdout.flush()
                 time.sleep(10)

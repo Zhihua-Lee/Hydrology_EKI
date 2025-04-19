@@ -42,34 +42,40 @@ def main(yaml_name):
         job_cmd = f"qsub {sim_dir}presimulate_Cr.sh"
         print(job_cmd)
         procs = os.system(job_cmd)
-        # wait for Cr_sim_data.csv to be generated as our simulated observation
+        start_time = time.time()
+        # Wait for Cr_sim_data.csv to be generated as our simulated observation
         while True:
             try:
+                elapsed = int(time.time() - start_time)
                 if os.path.isfile(output_csv):
-                    data = open(output_csv).read()
+                    with open(output_csv, 'r') as f:
+                        data = f.read()
                     if data.strip() != "":
-                        # clean the first two rows
+                        # Clean the first two rows
                         with open(output_csv, 'r') as f:
                             lines = f.readlines()
                         if len(lines) > 2:
                             lines_trimmed = lines[2:]
                             with open(output_csv, 'w') as f:
                                 f.writelines(lines_trimmed)
-                            print(f"Removed header lines from {output_csv}")
-                        print(f"File {output_csv} detected and non-empty. Proceeding...")
+                            print(f"\nRemoved header lines from {output_csv}")
+                        print(f"\n✅ File {output_csv} detected and non-empty after {elapsed} seconds. Proceeding...")
                         break
                     else:
-                        print(f"File {output_csv} exists but is empty. Waiting 10 seconds...")
+                        sys.stdout.write(f"\r⏳ {elapsed}s elapsed: File exists but is empty. Waiting...")
+                        sys.stdout.flush()
                 else:
-                    print(f"Waiting for {output_csv} to appear...")
+                    sys.stdout.write(f"\r⏳ {elapsed}s elapsed: Waiting for {output_csv} to appear...")
+                    sys.stdout.flush()
             except Exception as e:
-                print(f"Error checking file: {e}")
+                sys.stdout.write(f"\r❌ Error checking file: {e}. Retrying in 10s...     ")
+                sys.stdout.flush()
             time.sleep(10)
     
     # Get data file directory, idx of locations, and standard deviation parameters
     data_file = test_dict['meas_series']
     usgs_gauge_id = test_dict['meas_usgs'] # usgs gauge id for observation
-    meas_std = test_dict['abs_std_meas']
+    abs_meas_std = test_dict['abs_std_meas']
     rel_meas_std = test_dict['rel_std_meas']
     # loading USGS mapping
     usgs_to_link_id, link_to_usgs_id, file_order = load_usgs_mapping(test_dict)
@@ -96,7 +102,8 @@ def main(yaml_name):
         sparse_parent = np.ones((1, 1))
     else:
         sparse_parent = get_subwatershed(test_dict, model_link_ids)
-    latent_var = create_latent(test_dict, sparse_parent, ens) # initializing latent ensembles
+    # initializing latent ensembles: standard normal distribution
+    latent_var = create_latent(test_dict, sparse_parent, ens)
     # For parameters with `dist=True`, the original values in the template `.prm` are ignored and the values are generated entirely by mapping the latent variables into the specified bounds; 
     # for parameters with `dist=False`, the original values from the template `.prm` are used unchanged.
     prm_ens, sorted_link_ids = transform_latent(test_dict, sparse_parent, latent_var)
@@ -159,14 +166,14 @@ def main(yaml_name):
     save_statistics_csv(test_dict, sparse_parent, Y_mean=data_plot, Y_std=None, X_mat=None, name='csv/' + "meas")
 
     # EKI parameters (y = data, X = latent parameter ensemble, R = measurement uncertainty)
-    y = np.reshape(data_use,(-1,1)) 
-    R = (rel_meas_std * y.reshape(-1))**2 + meas_std**2
+    y = np.reshape(data_use,(-1,1)) # reshape into (N, 1)
+    R = (rel_meas_std * y.reshape(-1))**2 + abs_meas_std**2
     X_post = latent_var
 
     # Run test
     for i in tqdm(range(step_num)):
         # Perturb previous parameters, run model, get simulation results - Prior
-        X_prior = pert(X_post, test_dict, sparse_parent)   
+        X_prior = pert(X_post, test_dict, sparse_parent) # perturb in latent space  
         prm_ens_prior, _ = transform_latent(test_dict, sparse_parent, X_prior)
         create_prm(test_dict, sorted_link_ids, prm_ens_prior, ens) 
         Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)    
