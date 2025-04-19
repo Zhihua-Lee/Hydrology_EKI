@@ -421,9 +421,15 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
     Returns:
         np.ndarray: The updated ensemble of state vectors after the EnKF step.
     """
+
+    # If using 'metric' only, just use metric and thresh every other iteration
+    elif test_dict["meas_type"] == 'metric':
+            y_use, Y_use, R_use = event_meas_op(y, Y, R)
+            X_post = EnKF(X, Y_use, y_use, R_use)
+            # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
     
-    # If using threshold operator, just use y values larger than thresh_val
-    if test_dict["meas_type"] == 'thresh':
+    # If using 'threshed series' only, just use y values larger than thresh_val
+    if test_dict["meas_type"] == 'threshed_series':
         thresh_val = test_dict['thresh_val']
         idx_use = np.where(y > thresh_val) # (N_use, 1)
         thresh_idx = idx_use[0] # (N_use)
@@ -431,9 +437,9 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
         R_use = R[thresh_idx]
         Y_use = Y[thresh_idx, :]
         X_post = EnKF(X, Y_use, y_use, R_use)
-        
-    # If using metric operator, switch between metric and thresh every other iteration
-    elif test_dict["meas_type"] == 'metric':
+    
+    # If using 'metric & threshed series', switch between metric and thresh every other iteration
+    elif test_dict["meas_type"] == 'metric+threshed_series':
         if np.mod(i, 2) == 0:
             y_use, Y_use, R_use = event_meas_op(y, Y, R)
             X_post = EnKF(X, Y_use, y_use, R_use)
@@ -448,7 +454,7 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
             X_post = EnKF(X, Y_use, y_use, R_use)
             # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
     
-    # Otherwise (none), just use standard EKI
+    # Otherwise using 'series', just use standard EKI for obs series
     else:
         X_post = EnKF(X, Y, y, R)
     return X_post
