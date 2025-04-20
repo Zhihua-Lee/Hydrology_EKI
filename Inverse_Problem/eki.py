@@ -423,13 +423,13 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
     """
 
     # If using 'metric' only, just use metric and thresh every other iteration
-    elif test_dict["meas_type"] == 'metric':
+    if test_dict["meas_type"] == 'metric':
             y_use, Y_use, R_use = event_meas_op(y, Y, R)
             X_post = EnKF(X, Y_use, y_use, R_use)
             # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
     
     # If using 'threshed series' only, just use y values larger than thresh_val
-    if test_dict["meas_type"] == 'threshed_series':
+    elif test_dict["meas_type"] == 'threshed_series':
         thresh_val = test_dict['thresh_val']
         idx_use = np.where(y > thresh_val) # (N_use, 1)
         thresh_idx = idx_use[0] # (N_use)
