@@ -289,7 +289,8 @@ def main_visualization(test_dict):
         
     # Load USGS mapping using the provided CSV path (adjust relative path as needed)
     usgs_csv_path = test_dict["usgs_csv"]
-    usgs_2_id, id_2_usgs, file_order = load_usgs_mapping_from_path(usgs_csv_path)
+    link_sav = test_dict["link_sav"]
+    usgs_2_id, id_2_usgs, file_order = load_usgs_mapping_from_path(usgs_csv_path, link_sav)
     
     # Compute station indices and gauge names based on desired_usgs_ids.
     plot_station_indices = []

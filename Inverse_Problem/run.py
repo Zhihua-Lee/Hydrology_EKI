@@ -62,12 +62,12 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
             min_size = min(count_all)
             if (max_size - min_size) == 0:
                 if max_size == 0:
-                    sys.stdout.write("\r⏳ {elapsed}s elapsed: Waiting... All CSVs are zero-sized.           ")
+                    sys.stdout.write("\r"+f"⏳ {elapsed}s elapsed: Waiting... All CSVs are zero-sized.           ")
                     sys.stdout.flush()
                     time.sleep(10)
                 else:
                     # All files exist, are non-empty, and sizes are consistent.
-                    print("\n✅ CSVs are ready after {elapsed} seconds.")
+                    print("\n✅ CSVs are ready.")
                     break
             else:
                 msg = f"⏳ {elapsed}s elapsed: Waiting... File size mismatch. Sizes: {count_all}"

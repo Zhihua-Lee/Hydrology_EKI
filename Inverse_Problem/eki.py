@@ -102,7 +102,7 @@ def EnKF(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray
     K = np.linalg.solve((Y @ Y.T + R).T, (X @ Y.T).T).T
     
     #Updates states (parameter vector)
-    X_post = K @ (y_pert - Y_pre) + X_pre
+    X_post = X_pre + K @ (y_pert - Y_pre)
     return X_post
 
 def find_events(y: np.ndarray, min_dist: int, min_thresh: float, min_length: int) -> Tuple[List[List[int]], List[List[float]]]:
@@ -424,12 +424,14 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
 
     # If using 'metric' only, just use metric and thresh every other iteration
     if test_dict["meas_type"] == 'metric':
-            y_use, Y_use, R_use = event_meas_op(y, Y, R)
-            X_post = EnKF(X, Y_use, y_use, R_use)
-            # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
+        print("using metric")
+        y_use, Y_use, R_use = event_meas_op(y, Y, R)
+        X_post = EnKF(X, Y_use, y_use, R_use)
+        # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
     
     # If using 'threshed series' only, just use y values larger than thresh_val
     elif test_dict["meas_type"] == 'threshed_series':
+        print("using threshed_series")
         thresh_val = test_dict['thresh_val']
         idx_use = np.where(y > thresh_val) # (N_use, 1)
         thresh_idx = idx_use[0] # (N_use)
@@ -440,6 +442,7 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
     
     # If using 'metric & threshed series', switch between metric and thresh every other iteration
     elif test_dict["meas_type"] == 'metric+threshed_series':
+        print("using metric+threshed_series")
         if np.mod(i, 2) == 0:
             y_use, Y_use, R_use = event_meas_op(y, Y, R)
             X_post = EnKF(X, Y_use, y_use, R_use)
@@ -456,5 +459,24 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
     
     # Otherwise using 'series', just use standard EKI for obs series
     else:
-        X_post = EnKF(X, Y, y, R)
+        print("using series")
+        # X_post = EnKF(X, Y, y, R)
+
+        # ① 观测峰值
+        y_val = float(np.max(y))
+        y_peak = np.array([[y_val]], dtype=float)
+        print(f"🟠 Observed peak: {y_val:.3f}")
+    
+        # ② 每个成员的峰值
+        Y_vals = np.max(Y, axis=0)
+        Y_peak = Y_vals.reshape(1, -1)
+        print(f"🔵 Simulated peaks (ensemble): {np.round(Y_vals, 3)}")
+    
+        # ③ 对应观测误差（可改为 np.max(R)）
+        R_val = float(R[np.argmax(y)])
+        R_peak = np.array([R_val], dtype=float)
+        # print(f"⚠️  Observation error used (R): {R_val:.3f}")
+    
+        # Kalman 更新
+        X_post = EnKF(X, Y_peak, y_peak, R_peak)
     return X_post

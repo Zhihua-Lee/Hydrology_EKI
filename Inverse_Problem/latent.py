@@ -46,7 +46,7 @@ def create_latent(test_dict: dict, sparse_parent: np.ndarray, ens: int) -> np.nd
     for i, dist in enumerate(include_parameters):
         if dist:  # Check if the parameter is included
             # Generate random latent parameter values from a standard normal distribution
-            lv = np.random.normal(0, 1, (parent_num, ens))
+            lv = np.random.normal(0, test_dict['sig_P0'], (parent_num, ens))
             latent_mat[loc:loc + parent_num, :] = lv
             loc = loc + parent_num
 

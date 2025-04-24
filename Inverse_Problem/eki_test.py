@@ -78,6 +78,7 @@ def main(yaml_name):
     abs_meas_std = test_dict['abs_std_meas']
     rel_meas_std = test_dict['rel_std_meas']
     # loading USGS mapping
+    # file_order: # List of link IDs in the exact order they appear as columns in the series files; used to align USGS gauge data with model output
     usgs_to_link_id, link_to_usgs_id, file_order = load_usgs_mapping(test_dict)
     
     # Remove all temp files and copy yaml(initial, forcing, meas_csv) into out dir and tries to make output for csv and pickle outputs
@@ -109,7 +110,7 @@ def main(yaml_name):
     prm_ens, sorted_link_ids = transform_latent(test_dict, sparse_parent, latent_var)
 
     # Create(filtering based on lid) all necessary files for running tests
-    create_meas_sav(test_dict, sorted_link_ids)
+    create_meas_sav(test_dict, sorted_link_ids) #in the order of gauges
     create_test_initial_condition(test_dict, sorted_link_ids) # modified
     create_prm(test_dict, sorted_link_ids, prm_ens, ens)
     create_gbl(test_dict, ens)
@@ -158,11 +159,13 @@ def main(yaml_name):
     print("data shape:", data_tmp.shape)
     #col location in data file where the used gid is
     col_idx_gid = np.where(file_order == usgs_to_link_id[usgs_gauge_id])[0]
+    print("col_idx_gid:", col_idx_gid)
     data_use = data_tmp[:,col_idx_gid]
     data_plot, sav_ids = subsample_data(data_tmp, test_dict, sorted_link_ids, file_order)
     #TDOD: Change this so usgs_gauge_id can be a list of strings, to enable multiple sensors turned on simultaneously
-    #col location in .sav where the used gid is
-    col_idx_in_sav = np.where(sav_ids == usgs_to_link_id[usgs_gauge_id])[0] 
+    #col location in .sav where the used lid is
+    col_idx_in_sav = np.where(sav_ids == usgs_to_link_id[usgs_gauge_id])[0]
+    print("col_idx_in_sav",col_idx_in_sav)
     save_statistics_csv(test_dict, sparse_parent, Y_mean=data_plot, Y_std=None, X_mat=None, name='csv/' + "meas")
 
     # EKI parameters (y = data, X = latent parameter ensemble, R = measurement uncertainty)
@@ -170,7 +173,8 @@ def main(yaml_name):
     R = (rel_meas_std * y.reshape(-1))**2 + abs_meas_std**2
     X_post = latent_var
 
-    # Run test
+    # Run EKI steps
+    print("\n" + "="*60 + "\n" + "🚀  STARTING EKI PROCESS" +"\n"+ "="*60 + "\n")
     for i in tqdm(range(step_num)):
         # Perturb previous parameters, run model, get simulation results - Prior
         X_prior = pert(X_post, test_dict, sparse_parent) # perturb in latent space  

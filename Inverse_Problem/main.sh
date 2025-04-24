@@ -16,3 +16,6 @@ qstat -f -q IFC -u zli333
 
 # Submit the job to Argon to run
 ~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/eki_test.py ~/DA/2025_EKI/Inverse_Problem/config.j2 
+
+# Cr scan job to plot Cr-hydrograph curve
+~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/cr_scan.py ~/DA/2025_EKI/Inverse_Problem/config.j2
