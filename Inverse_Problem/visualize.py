@@ -23,8 +23,10 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import hydroeval as he
 import copy
+import struct # <-- Added import
 
 from ifc_usgs_fileorder import load_usgs_mapping_from_path
+from io_ifc import get_rainfall_for_lid_from_config
 
 # Global matplotlib settings
 plt.rcParams['font.size'] = 12
@@ -52,9 +54,11 @@ def peak_timing_diff(obs, sim):
     return np.argmax(sim) - np.argmax(obs)
 
 # ===================== Animation Frame Drawing Function =====================
-def draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis, measured_data, station_label):
+def draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis,
+                         measured_data, station_label, rain_df,
+                         using_simulated_data, Cr_ref): # <-- Added flags/values
     """
-    Draw a single animation frame.
+    Draw a single animation frame, scaling rainfall if using simulated data.
 
     Parameters:
       iter_idx: Current assimilation iteration (formatted as two-digit number).
@@ -63,34 +67,105 @@ def draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis, measure
       time_axis: DatetimeIndex for the x-axis.
       measured_data: Observed data array of shape (time_steps, num_stations).
       station_label: Station name (gauge ID) to display in the title.
+      rain_df (pd.DataFrame): Rainfall data for the station with DatetimeIndex.
+      using_simulated_data (bool): Flag indicating if simulated data scenario is active.
+      Cr_ref (float or None): The reference Cr value used in simulated experiments.
+    
     """
-    plt.clf()  # Clear current figure
+    fig = plt.gcf() # Get current figure
+    ax = plt.gca() # Get current axes
+
+    # --- Hydrograph plotting (Existing logic) ---
     station_ensemble = ensemble_sim[:, :, station_idx]
     median_sim = np.median(station_ensemble, axis=0)
     obs_series = measured_data[:, station_idx]
 
-    plt.plot(time_axis, median_sim, 'b-', label='Particle median')
-    plt.fill_between(time_axis,
+    ax.plot(time_axis, median_sim, 'b-', label='Particle median')
+    ax.fill_between(time_axis,
                      np.percentile(station_ensemble, 5, axis=0),
                      np.percentile(station_ensemble, 95, axis=0),
                      color='blue', alpha=0.3)
-    plt.plot(time_axis, obs_series, 'k--', label='Observed')
+    ax.plot(time_axis, obs_series, 'k--', label='Observed')
 
+    # --- Metric calculation (Existing logic) ---
     try:
-        kge_val = kge_metric(obs_series, median_sim)
-        pr_diff = peak_relative_diff(obs_series, median_sim)
-        pt_diff = peak_timing_diff(obs_series, median_sim)
-        print(f"Iteration {iter_idx:02d}, Gauge {station_label}: KGE={kge_val}, PeakDiff={pr_diff}, PeakTiming={pt_diff}")
-    except Exception:
-        print(f"Iteration {iter_idx:02d}, Gauge {station_label}: Metric calculation failed.")
+        # Ensure obs_series and median_sim are 1D arrays for metrics
+        obs_1d = obs_series.flatten()
+        sim_1d = median_sim.flatten()
+        # Add basic checks for valid data before calculating metrics
+        valid_indices = ~np.isnan(obs_1d) & ~np.isnan(sim_1d) & (obs_1d > 0)
+        if np.any(valid_indices):
+             kge_val = he.evaluator(he.nse, sim_1d[valid_indices], obs_1d[valid_indices])[0] # NSE used as proxy
+             # Ensure peaks are calculated only on valid data
+             obs_peak_val = np.max(obs_1d[valid_indices]) if np.any(obs_1d[valid_indices]) else np.nan
+             sim_peak_val = np.max(sim_1d[valid_indices]) if np.any(sim_1d[valid_indices]) else np.nan
 
-    plt.title(f'EKI iteration {iter_idx:02d} - Gauge {station_label}')
-    plt.xlabel('Time')
-    plt.ylabel('Discharge (m^3/s)')
-    plt.legend()
-    plt.grid(True)
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+             if not (np.isnan(obs_peak_val) or np.isnan(sim_peak_val) or obs_peak_val == 0):
+                 pr_diff = (sim_peak_val - obs_peak_val) / obs_peak_val
+             else:
+                 pr_diff = np.nan
+
+             # Ensure argmax is applied correctly if needed, or adjust peak timing logic
+             # Note: peak_timing_diff might need adjustment based on how time_axis relates to indices
+             # This simple argmax assumes time_axis corresponds directly to array index
+             pt_diff = np.argmax(sim_1d) - np.argmax(obs_1d) # Be cautious with this if NaNs exist or indices != time steps
+
+             print(f"Iteration {iter_idx:02d}, Gauge {station_label}: KGE={kge_val:.3f}, PeakRelDiff={pr_diff:.3f}, PeakTimeDiff={pt_diff}")
+        else:
+            print(f"Iteration {iter_idx:02d}, Gauge {station_label}: Insufficient valid data for metrics.")
+
+    except Exception as e:
+        print(f"Iteration {iter_idx:02d}, Gauge {station_label}: Metric calculation failed. Error: {e}")
+
+
+    # --- Plot setup (Existing logic) ---
+    ax.set_title(f'EKI iteration {iter_idx:02d} - Gauge {station_label}')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Discharge (m$^3$/s)') # Use LaTeX for m^3/s
+    ax.legend(loc='upper left') # Adjust legend location if needed
+    ax.grid(True)
+    # ax.tick_params(axis='x', rotation=45) # Keep or remove rotation as desired
+
+    # --- ADDED: Rainfall Plotting with conditional scaling ---
+    if not rain_df.empty:
+        ax2 = ax.twinx()
+
+        # Determine rainfall scale factor
+        scale_factor = 1.0
+        if using_simulated_data and Cr_ref is not None:
+             scale_factor = Cr_ref
+             # print(f"Info: Scaling rainfall by Cr_ref = {Cr_ref} for plotting.") # Optional info message
+
+        # Apply scaling
+        scaled_rainfall = rain_df["Rainfall"] * scale_factor
+        flipped_rainfall = -scaled_rainfall # Flip after scaling
+
+        # Calculate dynamic ylim based on the potentially scaled rainfall
+        min_flipped_rainfall = flipped_rainfall.min()
+        if pd.notna(min_flipped_rainfall):
+            ylim_bottom = min(min_flipped_rainfall * 1.2, min_flipped_rainfall - 0.5) # Buffer below lowest bar
+        else:
+            ylim_bottom = -1 # Default if no rainfall data or all zero after scaling
+
+        # Plot the potentially scaled and flipped rainfall
+        # --- OPTIMIZED Bar Plotting ---
+        ax2.bar(rain_df.index,           # X values (timestamps)
+                flipped_rainfall,        # Y values (flipped, scaled rainfall)
+                width=1/24,              # Width representing 1 hour
+                alpha=0.7,               # <--- Optional: Adjusted alpha for brighter color
+                color='deepskyblue',     # <--- CHANGED: High-contrast sky blue
+                label='Rainfall (Flipped)',# Label
+                zorder=3                 # Ensure bars are drawn on top
+               )
+        ax2.set_ylabel('Rainfall (mm/h, flipped)')
+        ax2.set_ylim(ylim_bottom, 0)
+
+    else:
+        print(f"Iteration {iter_idx:02d}, Gauge {station_label}: No rainfall data to plot.")
+
+    # --- Final Layout (Existing logic) ---
+    # plt.tight_layout() # Apply tight layout after all plotting is done
+    fig.autofmt_xdate() # Better date formatting/rotation
 
 # ===================== Data Loading Helper Function =====================
 def load_ensemble(assimilation_phase, iter_idx, out_dir):
@@ -117,44 +192,87 @@ def load_ensemble(assimilation_phase, iter_idx, out_dir):
         return np.load(f)
 
 # ===================== Hydrograph Animation Generation Function =====================
-def generate_hydrograph_animation(num_iters, station_indices, station_names, measured_data, time_axis, assimilation_phase, visual_output_dir, out_dir):
+def generate_hydrograph_animation(num_iters, station_indices, station_names, plot_link_ids,
+                                  measured_data, time_axis, start_time_str, end_time_str, rain_dir,
+                                  using_simulated_data, Cr_ref, # <-- Added flags/values
+                                  assimilation_phase, visual_output_dir, out_dir):
     """
-    Generate and save hydrograph animation GIFs.
+    Generate and save hydrograph animation GIFs. Includes rainfall plotting.
 
     Parameters:
-      num_iters: Number of assimilation iterations (post: num_iters+1; prior: num_iters)
-      station_indices: List of column indices in the observed data for the stations to plot.
-      station_names: List of corresponding station names (gauge IDs).
-      measured_data: Observed data array of shape (time_steps, num_stations).
-      time_axis: DatetimeIndex for the x-axis.
-      assimilation_phase: 'post' or 'prior'
-      visual_output_dir: Top-level output directory (e.g., 'visualization')
+        num_iters: Number of assimilation iterations (post: num_iters+1; prior: num_iters)
+        station_indices: List of column indices in the observed data for the stations to plot.
+        station_names: List of corresponding station names (gauge IDs).
+        measured_data: Observed data array of shape (time_steps, num_stations).
+        time_axis: DatetimeIndex for the x-axis.
+        assimilation_phase: 'post' or 'prior'
+        visual_output_dir: Top-level output directory (e.g., 'visualization')
+        plot_link_ids (list): List of Link IDs corresponding to station_indices/station_names.
+        start_time_str (str): Start time for fetching rainfall.
+        end_time_str (str): End time for fetching rainfall.
+        rain_dir (str): Base directory for rainfall data.
+        using_simulated_data (bool): Flag indicating if simulated data scenario is active.
+        Cr_ref (float or None): The reference Cr value used in simulated experiments.
     """
     hydrograph_frames_dir = os.path.join(visual_output_dir, assimilation_phase, "hydrograph", "frames")
     hydrograph_anim_dir = os.path.join(visual_output_dir, assimilation_phase, "hydrograph", "animation")
     clear_and_create_dir(hydrograph_frames_dir)
     clear_and_create_dir(hydrograph_anim_dir)
-    
+
     iter_range = range(num_iters + 1) if assimilation_phase == 'post' else range(num_iters)
-    
-    # Loop over the given station indices and corresponding gauge names
+
+    # Loop over the given station indices, names, and link IDs
     for i, station_idx in enumerate(station_indices):
         station_label = station_names[i]
+        target_lid = plot_link_ids[i] # Get the corresponding Link ID
+
+        print(f"\nProcessing Gauge: {station_label} (LID: {target_lid}) for {assimilation_phase} phase...")
+
+        # --- ADDED: Load rainfall data ONCE per station ---
+        print(f"Loading rainfall data for LID {target_lid} from {start_time_str} to {end_time_str}...")
+        rain_df = get_rainfall_for_lid_from_config(target_lid, start_time_str, end_time_str, rain_dir)
+        if rain_df.empty:
+            print(f"Warning: No rainfall data found for LID {target_lid} in the specified period.")
+        else:
+            print(f"Rainfall data loaded: {len(rain_df)} records.")
+
+
         frame_imgs = []
         for iter_idx in iter_range:
-            plt.clf()
+            # Create a new figure for each frame to avoid state issues
+            fig, ax = plt.subplots(figsize=(12, 6)) # Adjust figsize as needed
+
             ensemble_sim = load_ensemble(assimilation_phase, iter_idx, out_dir)
-            y_limits = [0, 3 * np.nanmax(measured_data[:, station_idx])]
+
+            # Dynamic Y-limit based on observed data peak for this station
+            max_obs_val = np.nanmax(measured_data[:, station_idx])
+            y_limit_top = max_obs_val * 1.5 if pd.notna(max_obs_val) and max_obs_val > 0 else 1.0 # Set upper limit with buffer, minimum of 1.0
+            y_limits = [0, y_limit_top]
+
+            # Draw the frame (hydrograph + potentially scaled rainfall)
+            # Note: draw_animation_frame now uses gcf/gca, so we don't pass ax explicitly
             draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis, measured_data,
-                                 station_label=station_label)
-            plt.ylim(*y_limits)
-            # File naming: iter_XX_gauge_<gauge id>_hydrograph.png
+                                 station_label=station_label, rain_df=rain_df,
+                                 using_simulated_data=using_simulated_data, Cr_ref=Cr_ref) # <-- Pass flags/values
+
+            ax.set_ylim(*y_limits) # Apply hydrograph y-limits
+
+            plt.tight_layout() # Apply layout adjustments
+
+            # File naming and saving (Existing logic)
             frame_filepath = os.path.join(hydrograph_frames_dir, f"iter_{iter_idx:02d}_gauge_{station_label}_hydrograph.png")
             plt.savefig(frame_filepath)
             frame_imgs.append(Image.open(frame_filepath))
-        gif_filepath = os.path.join(hydrograph_anim_dir, f"gauge_{station_label}_hydrograph_animation.gif")
-        frame_imgs[0].save(gif_filepath, save_all=True, append_images=frame_imgs[1:], duration=1000, loop=0)
-        print(f"Animation saved to {gif_filepath}")
+            plt.close(fig) # Close the figure to free memory
+
+        # Create GIF (Existing logic)
+        if frame_imgs:
+            gif_filepath = os.path.join(hydrograph_anim_dir, f"gauge_{station_label}_hydrograph_animation.gif")
+            frame_imgs[0].save(gif_filepath, save_all=True, append_images=frame_imgs[1:], duration=1000, loop=0)
+            print(f"Animation saved to {gif_filepath}")
+        else:
+             print(f"No frames generated for Gauge {station_label}, GIF not created.")
+
 
 # ===================== Parameter Evolution Plot Function =====================
 def plot_parameter_evolution(param_array, active_param_indices, param_labels, param_ranges, assimilation_phase, visual_output_dir, iter_range, cr_ref=None):
@@ -273,13 +391,12 @@ def main_visualization(test_dict):
     visual_output_dir = test_dict['out_dir'] + "visualization"    
     start_time_str = test_dict["time_start"]
     end_time_str = test_dict["time_end"]
+    # Ensure time_axis aligns with potential hourly rainfall data
     time_axis = pd.date_range(start=start_time_str, end=end_time_str, freq='H')
     num_assimilation_steps = test_dict["steps"]
     using_simulated_data = test_dict['using_simulated_data']
-    if using_simulated_data:
-        Cr_ref = test_dict['Cr_ref']
-    else:
-        Cr_ref = None
+    rain_dir = test_dict['rain_dir'] # <-- Get rainfall directory path
+    Cr_ref = test_dict.get('Cr_ref', None) # Use .get for safety if key might be missing
     # max_station_count = 5  # Default value if desired_usgs_ids not found
     
     # Retrieve desired gauge IDs from configuration; ensure it's a list.
@@ -292,9 +409,10 @@ def main_visualization(test_dict):
     link_sav = test_dict["link_sav"]
     usgs_2_id, id_2_usgs, file_order = load_usgs_mapping_from_path(usgs_csv_path, link_sav)
     
-    # Compute station indices and gauge names based on desired_usgs_ids.
+    # Compute station indices, gauge names, AND link IDs based on desired_usgs_ids.
     plot_station_indices = []
     plot_station_names = []
+    plot_link_ids = [] # <-- List to store corresponding Link IDs
     for usgs in desired_usgs_ids:
         link_id = usgs_2_id.get(usgs)
         if link_id is None:
@@ -304,6 +422,7 @@ def main_visualization(test_dict):
         if idx_arr.size > 0:
             plot_station_indices.append(idx_arr[0])
             plot_station_names.append(usgs)  # Use the gauge ID as station name.
+            plot_link_ids.append(link_id) # <-- Store the link_id
         else:
             print(f"Warning: Link id {link_id} for USGS {usgs} not found in file_order.")
     # if not plot_station_indices:
@@ -337,8 +456,12 @@ def main_visualization(test_dict):
                                                  -1,
                                                  post_param_array.shape[-1])
     iter_range_post = np.arange(0, num_assimilation_steps + 1)
+    print("\n--- Generating Post-Assimilation Visualizations ---")
     generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
+                                  plot_link_ids,
                                   observed_data_clean, time_axis,
+                                  start_time_str, end_time_str, rain_dir,
+                                  using_simulated_data, Cr_ref, # <-- Pass flags/values
                                   assimilation_phase='post', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
     plot_parameter_evolution(post_param_array, active_param_indices, param_labels, param_ranges,
                              assimilation_phase='post', visual_output_dir=visual_output_dir, iter_range=iter_range_post, cr_ref=Cr_ref)
@@ -356,8 +479,12 @@ def main_visualization(test_dict):
                                                    -1,
                                                    prior_param_array.shape[-1])
     iter_range_prior = np.arange(0, num_assimilation_steps)
+    print("\n--- Generating Prior-Assimilation Visualizations ---")
     generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
+                                  plot_link_ids,
                                   observed_data_clean, time_axis,
+                                  start_time_str, end_time_str, rain_dir,
+                                  using_simulated_data, Cr_ref, # <-- Pass flags/values
                                   assimilation_phase='prior', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
     plot_parameter_evolution(prior_param_array, active_param_indices, param_labels, param_ranges,
                              assimilation_phase='prior', visual_output_dir=visual_output_dir, iter_range=iter_range_prior, cr_ref=Cr_ref)
