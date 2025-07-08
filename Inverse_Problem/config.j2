@@ -6,9 +6,14 @@
 {% set using_simulated_data = True %} # to activate the if sentence below
 using_simulated_data: {{using_simulated_data}}               # loading simulated initial_data(condition), rainfall_data and hydrograph observations, 
                                                              # in which case known Cr -> rainfall_data(Cr) + initial_data -> hydrograph(Cr) 
-{% if using_simulated_data %}
-Cr_ref: 1.2                              # The "true" scaling factor that is imposed on the given rainfall_data in the simulated experiment,
-                                         # then the scaled rainfall_data will be input into the system as observation, to infer the true Cr_ref
+{% if using_simulated_data %}                            
+    # The "true" scaling factor that is imposed on the given rainfall_data in the simulated experiment,                                 
+    # then the scaled rainfall_data will be input into the system as observation, to infer the true Cr_ref
+    # Cr_ref: Can be a single value (will be expanded) or a vector matching the number of subwatershed divisions.
+    # Example with a single value:
+Cr_ref: 1.2
+    # Example with a vector (assuming 3 divisions):
+# Cr_ref: [1.5, 1.2, 1.8]
 {% endif %}
 
 # EKI Evolution Model Parameter Settings
@@ -39,6 +44,12 @@ thresh_val: 1.5                             # Threshold value (observations belo
 {# abs_std_meas: 42                         # Absolute standard deviation of observations #}
 abs_std_meas: 0                         # Absolute standard deviation of observations
 rel_std_meas: 0.1                        # Relative standard deviation of observations
+
+# Parameters for event statistics visualization
+event_finding:
+  min_dist: 24      # Minimum distance (hours) between peaks to be considered separate events
+  min_thresh_pct: 25 # Threshold for event detection, as a percentile of non-zero flows
+  min_length: 72    # Minimum duration (hours) for a sequence to be considered an event
 
 # EKI Algorithm Parameters
 steps: 10                                 # Number of EKI assimilation steps
@@ -103,6 +114,8 @@ out_dir: out/RealSensor_Experiments/{{ meas_usgs_location }}/             # Outp
 tmp_dir: tmp/RealSensor_Experiments/{{ meas_usgs_location }}/             # Temporary directory for intermediate files
 {% endif %}
 
+# Path to the shapefile for map visualization
+shapefile_path: ../sangamon/link_maps/network.shp
 
 
 

@@ -5,7 +5,6 @@ import numpy as np
 import os
 import yaml
 from jinja2 import Environment, FileSystemLoader
-
 ## Utility functions
 
 def process_yaml(yamlname: str, context: dict = None) -> dict:
@@ -83,14 +82,16 @@ def get_ids(test_dict: dict) -> List[int]:
 
 def get_subwatershed(test_dict, id_list_use):
     """
-    Get a sparse matrix representing the subwatershed based on the given test dictionary and the list of IDs to use.
-
+    Get a sparse matrix representing the subwatershed and a map from link ID to division ID.
+    
     Args:
         test_dict (dict): Test dictionary containing required parameters.
         id_list_use (List[int]): List of IDs to use for subsetting the subwatershed.
 
     Returns:
-        coo_matrix: Sparse matrix representing the subwatershed.
+        Tuple[coo_matrix, dict]: A tuple containing:
+            - sparse_parent: Sparse matrix representing the subwatershed.
+            - link_to_division_map: A dictionary mapping each link ID to its division index.
     """
     # Gets division value
     watershed_csv = test_dict["watershed_csv"]
@@ -125,24 +126,42 @@ def get_subwatershed(test_dict, id_list_use):
             id_tmp.append(id_val)
             id_div_tmp.append(id_divs[i])
     id_tmp = np.array(id_tmp)
-    id_div_tmp = np.array(id_div_tmp)
+    # id_div_tmp = np.array(id_div_tmp)
+    id_div_tmp_orig = np.array(id_div_tmp) # Keep original division IDs for mapping
+    # Create the link_id to original division_id mapping BEFORE re-indexing
+    # This map uses the original division IDs from the file (minus 1)
+    link_to_division_map_orig = {int(link): int(div) for link, div in zip(id_tmp, id_div_tmp_orig)}
+
     
     # Assigns value from 0 to max to each for divisions, used to eliminate unused indices
-    divs_new = 0
-    max_div = np.max(id_div_tmp)
-    for i in range(max_div + 1):
-        count_i = np.sum(id_div_tmp == i)
-        if count_i > 0:
-            id_div_tmp[id_div_tmp == i] = divs_new
-            divs_new += 1
+    # divs_new = 0
+    # max_div = np.max(id_div_tmp_orig)
+    id_div_tmp_new = np.copy(id_div_tmp_orig) # Use a copy for re-indexing
+
+    unique_orig_divs = np.sort(np.unique(id_div_tmp_orig))
+    orig_to_new_map = {orig_div: new_idx for new_idx, orig_div in enumerate(unique_orig_divs)}
+
+    # for i in range(max_div + 1):
+    #     count_i = np.sum(id_div_tmp_orig == i)
+    #     if count_i > 0:
+    #         id_div_tmp[id_div_tmp == i] = divs_new
+    #         divs_new += 1
+    for i in range(len(id_div_tmp_new)):
+        id_div_tmp_new[i] = orig_to_new_map[id_div_tmp_orig[i]]
+        
+    # Create the final map from link_id to the NEW, sequential division index
+    link_to_division_map_final = {int(link): int(new_div) for link, new_div in zip(id_tmp, id_div_tmp_new)}
 
     id_num = len(id_tmp)
-    subws_num = len(np.unique(id_div_tmp))
+    subws_num = len(np.unique(id_div_tmp_new))
     
     # Create sparse matrix to convert from full parameters to sparse representation
+    # Create sparse matrix using the new sequential division indices
     val_vals = np.ones(id_num)
     col_vals = np.arange(id_num)
-    row_vals = id_div_tmp
+    row_vals = id_div_tmp_new
     sparse_parent = coo_matrix((val_vals, (row_vals, col_vals)), shape=(subws_num, id_num))
 
-    return sparse_parent
+
+    # Return both the matrix and the final mapping
+    return sparse_parent, link_to_division_map_final

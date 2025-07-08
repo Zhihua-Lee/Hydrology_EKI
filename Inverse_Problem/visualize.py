@@ -25,8 +25,12 @@ import hydroeval as he
 import copy
 import struct # <-- Added import
 
+import geopandas as gpd
+from utils import get_subwatershed, get_ids
+
 from ifc_usgs_fileorder import load_usgs_mapping_from_path
 from io_ifc import get_rainfall_for_lid_from_config
+from eki import find_events, find_metric_values
 
 # Global matplotlib settings
 plt.rcParams['font.size'] = 12
@@ -56,7 +60,7 @@ def peak_timing_diff(obs, sim):
 # ===================== Animation Frame Drawing Function =====================
 def draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis,
                          measured_data, station_label, rain_df,
-                         using_simulated_data, Cr_ref): # <-- Added flags/values
+                         using_simulated_data, cr_ref_for_scaling): # <-- Added flags/values
     """
     Draw a single animation frame, scaling rainfall if using simulated data.
 
@@ -85,7 +89,9 @@ def draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis,
                      np.percentile(station_ensemble, 5, axis=0),
                      np.percentile(station_ensemble, 95, axis=0),
                      color='blue', alpha=0.3)
-    ax.plot(time_axis, obs_series, 'k--', label='Observed')
+    # Use a conditional label based on the data source
+    legend_text = 'Simulated Observation' if using_simulated_data else 'Observed'
+    ax.plot(time_axis, obs_series, 'k--', label=legend_text)
 
     # --- Metric calculation (Existing logic) ---
     try:
@@ -132,9 +138,9 @@ def draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis,
 
         # Determine rainfall scale factor
         scale_factor = 1.0
-        if using_simulated_data and Cr_ref is not None:
-             scale_factor = Cr_ref
-             # print(f"Info: Scaling rainfall by Cr_ref = {Cr_ref} for plotting.") # Optional info message
+        if using_simulated_data and cr_ref_for_scaling  is not None:
+             scale_factor = cr_ref_for_scaling 
+             # print(f"Info: Scaling rainfall by cr_ref_for_scaling  = {cr_ref_for_scaling } for plotting.") # Optional info message
 
         # Apply scaling
         scaled_rainfall = rain_df["Rainfall"] * scale_factor
@@ -194,7 +200,8 @@ def load_ensemble(assimilation_phase, iter_idx, out_dir):
 # ===================== Hydrograph Animation Generation Function =====================
 def generate_hydrograph_animation(num_iters, station_indices, station_names, plot_link_ids,
                                   measured_data, time_axis, start_time_str, end_time_str, rain_dir,
-                                  using_simulated_data, Cr_ref, # <-- Added flags/values
+                                  using_simulated_data, cr_ref_vec, # <-- is a vector or None
+                                  link_to_division_map, # <-- new map parameter
                                   assimilation_phase, visual_output_dir, out_dir):
     """
     Generate and save hydrograph animation GIFs. Includes rainfall plotting.
@@ -236,6 +243,15 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, plo
         else:
             print(f"Rainfall data loaded: {len(rain_df)} records.")
 
+        cr_ref_for_station = None # Default to None
+        if using_simulated_data and cr_ref_vec is not None and link_to_division_map is not None:
+            # --- New Logic: Find the specific Cr_ref for this station ---
+            division_id = link_to_division_map.get(target_lid)
+            if division_id is not None:
+                cr_ref_for_station = cr_ref_vec[division_id] # This is now a scalar
+            else:
+                print(f"Warning: Could not find division for link_id {target_lid}. Using first Cr_ref value.")
+                cr_ref_for_station = cr_ref_vec[0]
 
         frame_imgs = []
         for iter_idx in iter_range:
@@ -253,7 +269,8 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, plo
             # Note: draw_animation_frame now uses gcf/gca, so we don't pass ax explicitly
             draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis, measured_data,
                                  station_label=station_label, rain_df=rain_df,
-                                 using_simulated_data=using_simulated_data, Cr_ref=Cr_ref) # <-- Pass flags/values
+                                 using_simulated_data=using_simulated_data, 
+                                 cr_ref_for_scaling=cr_ref_for_station) # <-- Pass specific scalar
 
             ax.set_ylim(*y_limits) # Apply hydrograph y-limits
 
@@ -275,7 +292,10 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, plo
 
 
 # ===================== Parameter Evolution Plot Function =====================
-def plot_parameter_evolution(param_array, active_param_indices, param_labels, param_ranges, assimilation_phase, visual_output_dir, iter_range, cr_ref=None):
+def plot_parameter_evolution(param_array, active_param_indices, param_labels, param_ranges, 
+                             plot_station_indices, plot_link_ids, # <-- new parameters
+                             assimilation_phase, visual_output_dir, iter_range, 
+                             cr_ref_vec=None, link_to_division_map=None): # <-- new parameters
     """
     Plot parameter evolution graphs and save ensemble and mean-std plots.
 
@@ -294,93 +314,329 @@ def plot_parameter_evolution(param_array, active_param_indices, param_labels, pa
     clear_and_create_dir(param_ensemble_dir)
     clear_and_create_dir(param_mean_std_dir)
     
-    num_iters = len(iter_range)
-    num_stations = param_array.shape[2]
-    
-    # Ensemble plots: plot all ensemble trajectories
+    num_active_params = param_array.shape[1]
+
+    # Iterate through each ACTIVE parameter (e.g., just Cr in this case)
     for idx_active, orig_idx in enumerate(active_param_indices):
-        for station_idx in range(num_stations):
-            plt.figure()
-            plt.plot(iter_range, param_array[:, idx_active, station_idx, :])
-            plt.ylabel(param_labels[orig_idx])
+        # Iterate through the STATIONS that are selected for plotting
+        for i, station_idx in enumerate(plot_station_indices):
+            target_lid = plot_link_ids[i] # Get the link ID for the current station
+
+            # --- CORRECT IMPLEMENTATION ---
+            # 1. Find the division_id for the current link_id from the map
+            if link_to_division_map is None:
+                print(f"Warning: link_to_division_map is not available. Cannot plot parameter evolution.")
+                continue
+            
+            division_id = link_to_division_map.get(target_lid)
+            if division_id is None:
+                print(f"Warning: Cannot find division for LID {target_lid}. Skipping parameter plot for this station.")
+                continue
+
+            # 2. Use this division_id to index the parameter array
+            param_data_for_division = param_array[:, idx_active, division_id, :]
+
+            # 3. Find the specific Cr_ref for this station's division
+            cr_ref_for_plot = None
+            if cr_ref_vec is not None:
+                cr_ref_for_plot = cr_ref_vec[division_id]
+            # --- END OF CORRECTION ---
+
+            # --- Ensemble Plot ---
+            plt.figure(figsize=(10, 6))
+            plt.plot(iter_range, param_data_for_division) # Use the correctly indexed data
+            plt.title(f'Parameter Ensemble Trajectories - {param_labels[orig_idx]} (LID: {target_lid})')
+            plt.ylabel(f"Value of {param_labels[orig_idx]}")
             plt.xlabel('EKI Iterations')
             plt.ylim(*param_ranges[orig_idx])
-            out_path = os.path.join(param_ensemble_dir, f"parameter_{orig_idx}_station_{station_idx}_ensemble.png")
+            if cr_ref_for_plot is not None:
+                plt.axhline(cr_ref_for_plot, color='red', linestyle='--', label=f'Cr_ref = {cr_ref_for_plot:.2f}')
+                plt.legend()
+            out_path = os.path.join(param_ensemble_dir, f"parameter_{orig_idx}_LID_{target_lid}_ensemble.png")
             plt.savefig(out_path)
             plt.close()
-            print(f"Saved parameter ensemble plot {out_path}")
-    
-    # Mean-Std plots: plot mean and standard deviation over iterations
-    for idx_active, orig_idx in enumerate(active_param_indices):
-        for station_idx in range(num_stations):
-            plt.figure()
-            param_mean = np.mean(param_array[:, idx_active, station_idx, :], axis=1)
-            param_std = np.std(param_array[:, idx_active, station_idx, :], axis=1)
+            
+            # --- Mean-Std Plot ---
+            plt.figure(figsize=(10, 6))
+            param_mean = np.mean(param_data_for_division, axis=1)
+            param_std = np.std(param_data_for_division, axis=1)
             plt.plot(iter_range, param_mean, 'k-', lw=2, label='Mean')
             plt.fill_between(iter_range, param_mean - param_std, param_mean + param_std,
                              color='gray', alpha=0.3, label='Mean ± Std')
-            # **NEW**: overlay the Cr_ref line
-            if cr_ref is not None:
-                plt.axhline(cr_ref, color='red', linestyle='--', label='Cr_ref')
-            plt.ylabel(param_labels[orig_idx])
+            if cr_ref_for_plot is not None:
+                plt.axhline(cr_ref_for_plot, color='red', linestyle='--', label=f'Cr_ref = {cr_ref_for_plot:.2f}')
+            plt.title(f'Parameter Mean Evolution - {param_labels[orig_idx]} (LID: {target_lid})')
+            plt.ylabel(f"Value of {param_labels[orig_idx]}")
             plt.xlabel('EKI Iterations')
             plt.ylim(*param_ranges[orig_idx])
-            out_path = os.path.join(param_mean_std_dir, f"parameter_{orig_idx}_station_{station_idx}_mean_std.png")
+            plt.legend()
+            out_path = os.path.join(param_mean_std_dir, f"parameter_{orig_idx}_LID_{target_lid}_mean_std.png")
             plt.savefig(out_path)
             plt.close()
-            print(f"Saved parameter mean-std plot {out_path}")
+    
+    print("Finished plotting parameter evolution.")
+
 
 # ===================== Event Statistics Plot Function =====================
-def plot_event_statistics(assimilation_phase, visual_output_dir, out_dir):
+def plot_event_statistics(assimilation_phase, visual_output_dir, out_dir, test_dict, 
+                          plot_station_indices, plot_station_names, plot_link_ids):
     """
-    Compute and plot event statistics (peak, mean, and standard deviation) for observed data.
-    
-    For simplicity, this example computes the statistics over the entire time series for each station.
-    In a real application, you might implement a more sophisticated event detection algorithm.
+    Tracks the evolution of simulated event metrics over EKI iterations and plots
+    their convergence towards the observed metrics in a single consolidated figure per station.
     """
-    measured_data = np.genfromtxt(out_dir+"csv/meas_mean.csv", delimiter=',', skip_header=1)
-    measured_data[measured_data == 0] = np.nan
+    if assimilation_phase != 'post':
+        return
 
-    event_peaks = np.nanmax(measured_data, axis=0)
-    event_means = np.nanmean(measured_data, axis=0)
-    event_stds  = np.nanstd(measured_data, axis=0)
-
+    print("\n--- Generating Consolidated Event Statistics EVOLUTION Plots ---")
     event_stats_dir = os.path.join(visual_output_dir, assimilation_phase, "event_statistics")
     clear_and_create_dir(event_stats_dir)
 
-    stations = np.arange(measured_data.shape[1])
-    plt.figure()
-    plt.plot(stations, event_peaks, 'r-o', label="Peak")
-    plt.xlabel("Station")
-    plt.ylabel("Peak Value")
-    plt.title(f"Event Peak Values ({assimilation_phase})")
-    plt.legend()
-    out_path = os.path.join(event_stats_dir, "event_peak.png")
-    plt.savefig(out_path)
-    plt.close()
-    print(f"Saved event peak plot {out_path}")
+    # --- Steps 1-4: Load data and find events (same as before) ---
+    observed_data = np.genfromtxt(os.path.join(out_dir, "csv", "meas_mean.csv"), delimiter=',', skip_header=1)
+    num_steps = test_dict['steps']
+    iter_range = np.arange(0, num_steps)
+    event_params = test_dict.get('event_finding', {})
+    min_dist = event_params.get('min_dist', 24)
+    min_thresh_pct = event_params.get('min_thresh_pct', 25)
+    min_length = event_params.get('min_length', 72)
 
-    plt.figure()
-    plt.plot(stations, event_means, 'g-o', label="Mean")
-    plt.xlabel("Station")
-    plt.ylabel("Mean Value")
-    plt.title(f"Event Mean Values ({assimilation_phase})")
-    plt.legend()
-    out_path = os.path.join(event_stats_dir, "event_mean.png")
-    plt.savefig(out_path)
-    plt.close()
-    print(f"Saved event mean plot {out_path}")
+    # --- Loop through each station to generate ONE figure per station ---
+    for i, station_idx in enumerate(plot_station_indices):
+        station_name = plot_station_names[i]
+        target_lid = plot_link_ids[i]
+        
+        obs_series = observed_data[:, station_idx]
+        min_thresh_val = np.percentile(obs_series[obs_series > 0], min_thresh_pct) if np.any(obs_series > 0) else 0
+        event_indices_list, _ = find_events(obs_series, min_dist, min_thresh_val, min_length)
 
-    plt.figure()
-    plt.plot(stations, event_stds, 'b-o', label="Std")
-    plt.xlabel("Station")
-    plt.ylabel("Standard Deviation")
-    plt.title(f"Event Standard Deviation ({assimilation_phase})")
-    plt.legend()
-    out_path = os.path.join(event_stats_dir, "event_std.png")
-    plt.savefig(out_path)
-    plt.close()
-    print(f"Saved event std plot {out_path}")
+        if not event_indices_list:
+            print(f"No events found for station {station_name}. Skipping.")
+            continue
+            
+        print(f"Processing event evolution for Station: {station_name} (LID: {target_lid})")
+
+        # --- Calculate observed metrics (target lines) ---
+        observed_metrics = {}
+        for event_num, event_indices in enumerate(event_indices_list):
+            _, y_max, y_mean, _, _, _, y_std, y_mean_time, y_std_time = find_metric_values([event_indices], [obs_series[event_indices]])
+            observed_metrics[event_num] = {
+                'Peak': y_max[0][0], 'Mean': y_mean[0][0], 'Std_Dev': y_std[0][0],
+                'Timing_Mean': y_mean_time[0][0], 'Timing_Std_Dev': y_std_time[0][0]
+            }
+
+        # --- Step 5: Gather simulated metrics evolution from all iterations (same as before) ---
+        metric_names = ['Peak', 'Mean', 'Std_Dev', 'Timing_Mean', 'Timing_Std_Dev']
+        evolution_data = {
+            metric: {event_num: [] for event_num in range(len(event_indices_list))} 
+            for metric in metric_names
+        }
+
+        for iter_idx in iter_range:
+            sim_particles_file = os.path.join(out_dir, "npy", f"{iter_idx}_post_particles.npy")
+            if not os.path.exists(sim_particles_file):
+                print(f"Warning: Particles file not found for iter {iter_idx}. Stopping.")
+                break
+            
+            simulated_particles = np.load(sim_particles_file)
+            station_particles = simulated_particles[:, :, station_idx]
+            
+            for event_num, event_indices in enumerate(event_indices_list):
+                event_ensemble_data = station_particles[:, event_indices]
+                evolution_data['Peak'][event_num].append(np.max(event_ensemble_data, axis=1))
+                evolution_data['Mean'][event_num].append(np.mean(event_ensemble_data, axis=1))
+                evolution_data['Std_Dev'][event_num].append(np.std(event_ensemble_data, axis=1))
+                
+                ens_size = station_particles.shape[0]
+                timing_mean_ensemble, timing_std_ensemble = (np.zeros(ens_size), np.zeros(ens_size))
+                for particle_idx in range(ens_size):
+                    vals = event_ensemble_data[particle_idx, :]
+                    if np.sum(vals) > 0:
+                        mean_t = np.sum(event_indices * vals) / np.sum(vals)
+                        var_t = np.sum(vals * (event_indices - mean_t)**2) / np.sum(vals)
+                        timing_mean_ensemble[particle_idx] = mean_t
+                        timing_std_ensemble[particle_idx] = np.sqrt(var_t)
+                    else:
+                        timing_mean_ensemble[particle_idx], timing_std_ensemble[particle_idx] = (np.nan, np.nan)
+                
+                evolution_data['Timing_Mean'][event_num].append(timing_mean_ensemble)
+                evolution_data['Timing_Std_Dev'][event_num].append(timing_std_ensemble)
+
+        # --- Step 6: Create ONE figure with 5 subplots for the station ---
+        fig, axes = plt.subplots(len(metric_names), 1, figsize=(12, 18), sharex=True)
+        fig.suptitle(f'Event Metrics Evolution for Station {station_name} (LID: {target_lid})', fontsize=16)
+        
+        colors = plt.cm.viridis(np.linspace(0, 1, len(event_indices_list)))
+
+        for i, metric_name in enumerate(metric_names):
+            ax = axes[i]
+            for event_num in range(len(event_indices_list)):
+                # Stack the list of ensemble arrays into a single 2D array
+                metric_evolution_array = np.vstack(evolution_data[metric_name][event_num])
+                
+                mean_evolution = np.nanmean(metric_evolution_array, axis=1)
+                std_evolution = np.nanstd(metric_evolution_array, axis=1)
+                
+                # Plot mean evolution for this event
+                ax.plot(iter_range, mean_evolution, color=colors[event_num], label=f'Event {event_num+1} Sim Mean')
+                # Plot uncertainty band for this event
+                ax.fill_between(iter_range, mean_evolution - std_evolution, mean_evolution + std_evolution,
+                                color=colors[event_num], alpha=0.15)
+                
+                # Plot the observed target value for this event
+                target_value = observed_metrics[event_num][metric_name]
+                ax.axhline(target_value, color=colors[event_num], linestyle='--', 
+                           label=f'Event {event_num+1} Obs ({target_value:.2f})')
+
+            y_label = 'Discharge (m$^3$/s)' if 'Timing' not in metric_name else 'Time (hours)'
+            ax.set_ylabel(y_label)
+            ax.set_title(f'Evolution of {metric_name.replace("_", " ")}')
+            ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+            ax.grid(True)
+
+        axes[-1].set_xlabel('EKI Iteration')
+        fig.tight_layout(rect=[0, 0, 0.85, 0.96]) # Adjust layout to make space for suptitle and legend
+        
+        output_path = os.path.join(event_stats_dir, f"station_{station_name}_all_metrics_evolution.png")
+        plt.savefig(output_path)
+        plt.close(fig)
+        print(f"  - Saved consolidated evolution plot for Station {station_name}")
+
+
+def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, cr_ref_vec=None):
+    """
+    Generates and saves a map of Cr values or Cr error, with styling
+    and annotations inspired by the reference notebook.
+
+    If using_simulated_data is true and cr_ref_vec is provided, it plots the 
+    categorized percentage difference. Otherwise, it plots the absolute calibrated Cr values.
+    """
+    # --- 1. Setup paths and directories ---
+    maps_dir = os.path.join(visual_output_dir, assimilation_phase, "maps")
+    clear_and_create_dir(maps_dir)
+
+    shapefile_path = test_dict.get('shapefile_path')
+    if not shapefile_path or not os.path.exists(shapefile_path):
+        print(f"Warning: Shapefile not found at {shapefile_path}. Skipping map generation.")
+        return
+
+    # --- 2. Load final parameter results ---
+    num_steps = test_dict['steps']
+    last_iter_idx = num_steps - 1
+    
+    if assimilation_phase != 'post' or last_iter_idx < 0:
+        print(f"Info: Cr map is only generated for the final 'post' assimilation phase. Skipping for '{assimilation_phase}'.")
+        return
+
+    param_file = os.path.join(out_dir, 'csv', f"{last_iter_idx}_post_params_mean.csv")
+    if not os.path.exists(param_file):
+        print(f"Warning: Final parameter file not found: {param_file}. Skipping map generation.")
+        return
+
+    cr_sparse = pd.read_csv(param_file, header=None).to_numpy()
+    cr_sparse_values = cr_sparse.flatten()
+    
+    # --- 3. Expand sparse parameters to all links and create a DataFrame ---
+    model_link_ids = get_ids(test_dict)
+    sparse_parent, link_to_division_map = get_subwatershed(test_dict, model_link_ids)
+    
+    cr_full_links = sparse_parent.T @ cr_sparse_values
+    
+    cr_df = pd.DataFrame({
+        'link_id': model_link_ids,
+        'Cr': cr_full_links,
+        'division_id': [link_to_division_map.get(lid) for lid in model_link_ids]
+    })
+
+    # --- 4. Load shapefile and merge data ---
+    gdf = gpd.read_file(shapefile_path)
+    gdf.rename(columns={'LINKNO': 'link_id'}, inplace=True)
+    gdf['link_id'] = gdf['link_id'].astype(int)
+    gdf_merged = gdf.merge(cr_df, on='link_id', how='left')
+    gdf_to_plot = gdf_merged[gdf_merged['division_id'].notna()].copy()
+
+    # --- 5. Determine plotting mode and prepare data ---
+    is_simulated = test_dict.get('using_simulated_data', False) and cr_ref_vec is not None
+    
+    # --- NEW: Configuration from notebook style ---
+    PERCENTAGE_THRESHOLDS = [0.1, 1, 5, 10, 20, 50, 100]
+    ANNOTATION_FONT_SIZE = 6
+    
+    plot_col = 'Cr'
+    plot_title = f'Final Calibrated Cr Distribution ({assimilation_phase})'
+    cbar_label = 'Calibrated Cr Value'
+
+    if is_simulated:
+        # --- NEW: Categorization logic from notebook ---
+        # Map reference Cr values to each division
+        ref_cr_map = {div_id: cr_ref_vec[div_id] for div_id in range(len(cr_ref_vec))}
+        gdf_to_plot['Cr_ref'] = gdf_to_plot['division_id'].map(ref_cr_map)
+        
+        # Calculate percentage difference
+        gdf_to_plot['percentage_diff'] = ((gdf_to_plot['Cr'] - gdf_to_plot['Cr_ref']).abs() / gdf_to_plot['Cr_ref']) * 100
+        
+        # Create bins and labels for categorization
+        bins = [0] + PERCENTAGE_THRESHOLDS + [float('inf')]
+        labels = [f'≤ {PERCENTAGE_THRESHOLDS[0]}%'] + \
+                 [f'{PERCENTAGE_THRESHOLDS[i]}% - {PERCENTAGE_THRESHOLDS[i+1]}%' for i in range(len(PERCENTAGE_THRESHOLDS)-1)] + \
+                 [f'> {PERCENTAGE_THRESHOLDS[-1]}%']
+        
+        gdf_to_plot['diff_category'] = pd.cut(
+            gdf_to_plot['percentage_diff'],
+            bins=bins, labels=labels, right=True, include_lowest=True, ordered=True
+        )
+        
+        plot_col = 'diff_category'
+        plot_title = f'Final Cr Parameter Error ({assimilation_phase})'
+        cbar_label = f'% Difference from Reference Cr'
+    
+    # --- 6. Plotting ---
+    # --- MODIFIED: Figure size and plot logic ---
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8)) # Unified figure size
+
+    if is_simulated:
+        # Categorical plot for error map
+        active_categories = gdf_to_plot['diff_category'].cat.categories
+        cmap = plt.get_cmap('Reds', len(active_categories))
+        gdf_to_plot.plot(
+            ax=ax,
+            column=plot_col,
+            cmap=cmap,
+            legend=True,
+            legend_kwds={'title': cbar_label, 'loc': 'upper left', 'bbox_to_anchor': (1, 1)},
+            categorical=True,
+            missing_kwds={"color": "lightgrey", "label": "No Data"}
+        )
+    else:
+        # Continuous color plot for absolute values
+        gdf_to_plot.plot(column=plot_col, ax=ax, legend=True,
+                         legend_kwds={'label': cbar_label, 'orientation': "horizontal"})
+
+    # --- NEW: Add annotations ---
+    if 'division_id' in gdf_to_plot.columns:
+        # Create a dissolved GeoDataFrame to find a representative point for each division
+        dissolved = gdf_to_plot.dissolve(by='division_id', aggfunc={'Cr': 'first'})
+        dissolved['point'] = dissolved.geometry.representative_point()
+        
+        for _, row in dissolved.iterrows():
+            if pd.notna(row['Cr']) and row['point']:
+                ax.text(
+                    row['point'].x, row['point'].y, f"{row['Cr']:.2f}", # Format to 2 decimal places
+                    fontsize=ANNOTATION_FONT_SIZE, ha='center', va='center',
+                    bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.6, ec='none')
+                )
+    
+    ax.set_title(plot_title)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_axis_off() # Hide axes for a cleaner map look
+    plt.tight_layout()
+
+    # --- 7. Save the figure ---
+    output_path = os.path.join(maps_dir, f"final_cr_map_{assimilation_phase}.png")
+    plt.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved Cr map to {output_path}")
+
 
 # ===================== Main Visualization Function =====================
 def main_visualization(test_dict):
@@ -396,7 +652,38 @@ def main_visualization(test_dict):
     num_assimilation_steps = test_dict["steps"]
     using_simulated_data = test_dict['using_simulated_data']
     rain_dir = test_dict['rain_dir'] # <-- Get rainfall directory path
-    Cr_ref = test_dict.get('Cr_ref', None) # Use .get for safety if key might be missing
+    # Cr_ref = test_dict.get('Cr_ref', None) # Use .get for safety if key might be missing
+    # --- New logic for handling Cr_ref and creating cr_ref_vec ---
+    cr_ref_vec = None
+    # --- New: Get the link-to-division map ---
+    link_to_division_map = None
+
+    model_link_ids_temp = get_ids(test_dict)
+    if test_dict['watershed_csv']:
+        sparse_parent_temp, link_to_division_map = get_subwatershed(test_dict, model_link_ids_temp)
+        num_divisions = sparse_parent_temp.shape[0]
+    else: # Handle no-watershed case
+        num_divisions = 1 
+        link_to_division_map = {link_id: 0 for link_id in model_link_ids_temp}
+    
+    if using_simulated_data:
+        cr_ref_config = test_dict.get('Cr_ref')
+        if cr_ref_config is not None:
+            if isinstance(cr_ref_config, (int, float)):
+                # If Cr_ref is a single value, expand it to a vector
+                cr_ref_vec = np.full(num_divisions, float(cr_ref_config))
+                print(f"Info: Expanded single Cr_ref {cr_ref_config} to a vector of size {num_divisions}.")
+            elif isinstance(cr_ref_config, list):
+                # If it's a list, check if its size matches the number of divisions
+                if len(cr_ref_config) == num_divisions:
+                    cr_ref_vec = np.array(cr_ref_config)
+                    print(f"Info: Using provided Cr_ref vector of size {len(cr_ref_vec)}.")
+                else:
+                    raise ValueError(f"Error: The provided Cr_ref vector has size {len(cr_ref_config)}, but the number of subwatershed divisions is {num_divisions}.")
+            else:
+                 raise TypeError(f"Error: Cr_ref in config must be a number or a list, but got {type(cr_ref_config)}.")
+    
+    
     # max_station_count = 5  # Default value if desired_usgs_ids not found
     
     # Retrieve desired gauge IDs from configuration; ensure it's a list.
@@ -457,15 +744,25 @@ def main_visualization(test_dict):
                                                  post_param_array.shape[-1])
     iter_range_post = np.arange(0, num_assimilation_steps + 1)
     print("\n--- Generating Post-Assimilation Visualizations ---")
-    generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
-                                  plot_link_ids,
-                                  observed_data_clean, time_axis,
-                                  start_time_str, end_time_str, rain_dir,
-                                  using_simulated_data, Cr_ref, # <-- Pass flags/values
-                                  assimilation_phase='post', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
-    plot_parameter_evolution(post_param_array, active_param_indices, param_labels, param_ranges,
-                             assimilation_phase='post', visual_output_dir=visual_output_dir, iter_range=iter_range_post, cr_ref=Cr_ref)
-    plot_event_statistics('post', visual_output_dir, test_dict['out_dir'])
+    # generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
+    #                               plot_link_ids,
+    #                               observed_data_clean, time_axis,
+    #                               start_time_str, end_time_str, rain_dir,
+    #                               using_simulated_data, cr_ref_vec, # <-- Pass flags/values
+    #                               link_to_division_map, # <-- Pass the map
+    #                               assimilation_phase='post', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
+    # plot_parameter_evolution(post_param_array, active_param_indices, param_labels, param_ranges,
+    #                          plot_station_indices, # Pass station indices
+    #                          plot_link_ids,        # Pass corresponding link IDs
+    #                          assimilation_phase='post', visual_output_dir=visual_output_dir, iter_range=iter_range_post, 
+    #                          cr_ref_vec=cr_ref_vec,      # Pass the vector
+    #                          link_to_division_map=link_to_division_map) # Pass the map
+    plot_event_statistics('post', visual_output_dir, test_dict['out_dir'], test_dict,
+                          plot_station_indices, plot_station_names, plot_link_ids)
+    
+    # --- CALL THE MAP GENERATION FUNCTION ---
+    # Call the new map generation function here for the final post-assimilation result.
+    generate_cr_map('post', visual_output_dir, test_dict['out_dir'], test_dict, cr_ref_vec)
 
     # -------------------- Prior Assimilation (prior) --------------------
     prior_param_list = []
@@ -480,16 +777,22 @@ def main_visualization(test_dict):
                                                    prior_param_array.shape[-1])
     iter_range_prior = np.arange(0, num_assimilation_steps)
     print("\n--- Generating Prior-Assimilation Visualizations ---")
-    generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
-                                  plot_link_ids,
-                                  observed_data_clean, time_axis,
-                                  start_time_str, end_time_str, rain_dir,
-                                  using_simulated_data, Cr_ref, # <-- Pass flags/values
-                                  assimilation_phase='prior', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
-    plot_parameter_evolution(prior_param_array, active_param_indices, param_labels, param_ranges,
-                             assimilation_phase='prior', visual_output_dir=visual_output_dir, iter_range=iter_range_prior, cr_ref=Cr_ref)
-    plot_event_statistics('prior', visual_output_dir, test_dict['out_dir'])
-    
+    # generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
+    #                               plot_link_ids,
+    #                               observed_data_clean, time_axis,
+    #                               start_time_str, end_time_str, rain_dir,
+    #                               using_simulated_data, cr_ref_vec, # Pass the vector
+    #                               link_to_division_map, # <-- Pass the map
+    #                               assimilation_phase='prior', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
+    # plot_parameter_evolution(prior_param_array, active_param_indices, param_labels, param_ranges,
+    #                          plot_station_indices, # Pass station indices
+    #                          plot_link_ids,        # Pass corresponding link IDs                             
+    #                          assimilation_phase='prior', visual_output_dir=visual_output_dir, iter_range=iter_range_prior, 
+    #                          cr_ref_vec=cr_ref_vec,      # Pass the vector
+    #                          link_to_division_map=link_to_division_map) # Pass the map
+    plot_event_statistics('prior', visual_output_dir, test_dict['out_dir'], test_dict,
+                          plot_station_indices, plot_station_names, plot_link_ids)
+
     plt.close('all')
     print("Visualization complete.")
 
