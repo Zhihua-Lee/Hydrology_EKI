@@ -17,3 +17,5 @@ sangamon/usgs-basins.geojson
 sangamon/link_maps/hills.shp
 sangamon/link_maps/network.dbf
 sangamon/link_maps/network.shp
+*.tif
+*.zip
