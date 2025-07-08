@@ -91,12 +91,35 @@ A critical aspect to analyze here is the potential for **ill-posedness**. If the
 
 #### `event_statistics/`
 
-This folder contains plots of metrics derived from the hydrographs. While the core of the inverse problem is fitting the time series, analyzing specific event characteristics can provide further insight. The current implementation extracts and plots summary statistics for each station, such as:
-* Peak Flow
-* Mean Flow
-* Standard Deviation of Flow
+This directory contains plots that visualize the evolution of key statistical metrics for discrete hydrological events. Instead of evaluating the model's performance across the entire time series, this approach provides a more granular assessment by focusing on how well the model reproduces the characteristics of individual high-flow events (e.g., storm hydrographs). This aligns directly with the event-based operator used during the EKI assimilation steps.
 
-These metrics help quantify how well the model captures not just the overall shape but also the magnitude and variability of key hydrological events.
+A core concept of the event operator in `eki.py` is that it transforms the raw hydrograph time series into a feature vector for the data assimilation process. Each identified event is described by **5 key metrics**:
+1.  Peak Discharge
+2.  Mean Discharge
+3.  Standard Deviation of Discharge
+4.  Timing of Event "Center of Mass" (Mean Time)
+5.  Duration/Spread of Event (Std Dev of Time)
+
+**Dimensionality of the Observation Vector (`y_event`)**
+A key aspect of this method is its dynamic nature. The total dimension of the observation vector `y_event` used in the Kalman Filter update is not fixed; it depends on the number of events identified in the observation data. If the `find_events` function identifies **N** distinct events in the time series, the resulting feature vector will have a total dimension of **5 \* N**. This is created by concatenating the metrics from all `N` events into a single, long vector.
+
+**Alignment of Predicted vs. Reference Events**
+A crucial question in this process is how the simulated ("predicted") events are aligned with the observed ("reference") events. The user might ask: "Is the number of predicted events always the same as the reference? Does the DA process always predict an event where a reference one exists?"
+
+The methodology in `eki.py` and `visualize.py` handles this elegantly and robustly:
+1.  **Event windows are defined *exclusively* from the observed data.** The `find_events` algorithm is run **only** on the observation time series (`y`) to identify the start and end times (i.e., the index windows) for all `N` reference events.
+2.  **Simulated metrics are calculated over these fixed windows.** The system does **not** try to find separate events in the simulated hydrograph. Instead, it takes the time windows defined by the observations and calculates the metrics for the model's output (`G(theta)`) within those *exact same windows*.
+
+By design, this means the number of "predicted" events is **always identical** to the number of reference events. The data assimilation process is not trying to predict *if* an event occurs, but rather it is trying to match the characteristics of the model's output to the observed characteristics during the known time periods of real-world events.
+
+**Description of the Plots**
+The plots in this folder reflect this "evolution-style" analysis. For each station, a single figure is generated containing 5 subplots (one for each metric).
+* The **x-axis** represents the EKI iteration number.
+* Each **subplot** focuses on one metric (e.g., "Peak Discharge").
+* Within a subplot, multiple **colored lines** show the evolution of the ensemble mean for that metric for each distinct event (Event 1, Event 2, etc.). The shaded area represents the ensemble's uncertainty (±1 standard deviation).
+* A **dashed horizontal line** corresponding to each event's line shows the target "true" value calculated from the observed data.
+
+This visualization directly shows how effectively the EKI process constrains the model to reproduce the specific characteristics of each individual storm over time.
 
 #### `maps/`
 
