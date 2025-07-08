@@ -30,6 +30,10 @@ def main(yaml_name):
     print("data from: ",test_dict['meas_series'])
     
     if using_simulated_data:
+        
+
+        
+        # simulate hydrograph data
         Cr_ref = test_dict['Cr_ref']
         update_prm_add_or_overwrite_cr(test_dict['prm'], Cr_ref)
         output_csv = test_dict['meas_series']

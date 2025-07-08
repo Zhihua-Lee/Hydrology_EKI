@@ -113,8 +113,8 @@ def get_subwatershed(test_dict, id_list_use):
     elif watershed_depth == 8:
         idx_col = 5
 
-    # id_divs = (watershed_vals[idx_sort, idx_col] - 1).astype(int)
-    id_divs = (watershed_vals[idx_sort, idx_col] ).astype(int) # If ids in the watershed file is starting from 0 but not 1
+    id_divs = (watershed_vals[idx_sort, idx_col] - 1).astype(int)
+    # id_divs = (watershed_vals[idx_sort, idx_col] ).astype(int) # If ids in the watershed file is starting from 0 but not 1
 
     id_tmp = []
     id_div_tmp = []
