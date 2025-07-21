@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from latent import transform_latent_sparse
 from typing import List, Tuple, Dict, Union
-from utils import time_to_epoch
+from utils import time_to_epoch, get_ids, get_subwatershed # <-- Add get_ids and get_subwatershed
 
 from string import Template
 import shutil
@@ -346,59 +346,143 @@ def create_prm(test_dict: dict, id_list: list, prm_array: np.ndarray, ens: int) 
 #         for line in new_lines:
 #             f.write("%s\n" % line)
 
-def update_prm_add_or_overwrite_cr(prm_file_path, cr_value):
+# def update_prm_add_or_overwrite_cr(prm_file_path, cr_value):
+#     """
+#     Update a .prm file by setting the 13th parameter (Cr) for each link.
+#     If a link already has 13 or more parameters, Cr is overwritten.
+#     If it has only 12, Cr is appended.
+
+#     Args:
+#         prm_file_path (str): Full path to the .prm file.
+#         cr_value (float or str): The Cr value to apply.
+#     """
+#     with open(prm_file_path, 'r') as f:
+#         lines = f.readlines()
+
+#     updated_lines = []
+#     i = 0
+#     n = len(lines)
+
+#     # Preserve leading blank lines and the "total count" line
+#     while i < n and lines[i].strip() == "":
+#         updated_lines.append(lines[i])
+#         i += 1
+#     if i < n:
+#         updated_lines.append(lines[i])
+#         i += 1
+
+#     # Each link has two lines: one for ID, one for parameters
+#     while i < n:
+#         # Skip blank lines between blocks
+#         while i < n and lines[i].strip() == "":
+#             updated_lines.append(lines[i])
+#             i += 1
+#         # Link ID line
+#         if i < n:
+#             updated_lines.append(lines[i])
+#             i += 1
+#         # Skip blank lines before parameter line
+#         while i < n and lines[i].strip() == "":
+#             updated_lines.append(lines[i])
+#             i += 1
+#         # Parameter line
+#         if i < n:
+#             tokens = lines[i].strip().split()
+#             if len(tokens) >= 13:
+#                 tokens[12] = str(cr_value)
+#             else:
+#                 tokens.append(str(cr_value))
+#             updated_lines.append(" ".join(tokens) + "\n")
+#             i += 1
+
+#     with open(prm_file_path, 'w') as f:
+#         f.writelines(updated_lines)
+#     print(f"Updated {prm_file_path}: set Cr (param #13) to {cr_value} for all links.")
+
+def update_prm_by_division(prm_file_path: str, link_to_division_map: dict, cr_ref_vec: np.ndarray):
     """
-    Update a .prm file by setting the 13th parameter (Cr) for each link.
-    If a link already has 13 or more parameters, Cr is overwritten.
-    If it has only 12, Cr is appended.
+    Updates a .prm file by assigning Cr values based on sub-watershed divisions.
+    This version uses structure-aware parsing to robustly handle re-runs.
 
     Args:
-        prm_file_path (str): Full path to the .prm file.
-        cr_value (float or str): The Cr value to apply.
+        prm_file_path (str): Full path to the .prm file to modify.
+        link_to_division_map (dict): A pre-computed dictionary mapping each link ID to its division index.
+        cr_ref_vec (np.ndarray): A vector of Cr values where the index corresponds 
+                                 to the sub-watershed division ID.
     """
+    print(f"Executing structure-aware update for {prm_file_path}...")
+    
     with open(prm_file_path, 'r') as f:
         lines = f.readlines()
 
     updated_lines = []
-    i = 0
-    n = len(lines)
+    
+    # Handle the first line (total link count) separately
+    if not lines:
+        print("Warning: PRM file is empty.")
+        return
+    updated_lines.append(lines[0])
+    
+    # Process the rest of the file in pairs (ID line, Parameter line)
+    i = 1
+    while i < len(lines):
+        # The current line should be the ID line.
+        id_line = lines[i].strip()
+        
+        # Find the next non-empty line for parameters
+        param_line_idx = i + 1
+        while param_line_idx < len(lines) and not lines[param_line_idx].strip():
+            param_line_idx += 1
+            
+        if not id_line: # If we encounter blank lines, just skip to the next
+            i += 1
+            continue
+            
+        if param_line_idx >= len(lines):
+            # Reached end of file with a trailing ID line, just append it
+            updated_lines.append(lines[i])
+            break
 
-    # Preserve leading blank lines and the "total count" line
-    while i < n and lines[i].strip() == "":
-        updated_lines.append(lines[i])
-        i += 1
-    if i < n:
-        updated_lines.append(lines[i])
-        i += 1
+        param_line = lines[param_line_idx].strip()
 
-    # Each link has two lines: one for ID, one for parameters
-    while i < n:
-        # Skip blank lines between blocks
-        while i < n and lines[i].strip() == "":
-            updated_lines.append(lines[i])
-            i += 1
-        # Link ID line
-        if i < n:
-            updated_lines.append(lines[i])
-            i += 1
-        # Skip blank lines before parameter line
-        while i < n and lines[i].strip() == "":
-            updated_lines.append(lines[i])
-            i += 1
-        # Parameter line
-        if i < n:
-            tokens = lines[i].strip().split()
-            if len(tokens) >= 13:
-                tokens[12] = str(cr_value)
+        try:
+            current_link_id = int(id_line.split()[0])
+            
+            # Get the correct Cr value for this link
+            division_id = link_to_division_map.get(current_link_id)
+            
+            if division_id is not None:
+                cr_value_for_link = cr_ref_vec[division_id]
+                
+                # Modify the parameter line
+                tokens = param_line.split()
+                if len(tokens) >= 13:
+                    tokens[12] = str(cr_value_for_link)
+                else:
+                    tokens.append(str(cr_value_for_link))
+                
+                # Add the original ID line and the MODIFIED parameter line
+                updated_lines.append(lines[i])
+                updated_lines.append(" ".join(tokens) + "\n")
             else:
-                tokens.append(str(cr_value))
-            updated_lines.append(" ".join(tokens) + "\n")
-            i += 1
+                # If link not in map, keep original pair of lines
+                updated_lines.append(lines[i])
+                updated_lines.append(lines[param_line_idx])
 
+        except (ValueError, IndexError):
+            # If the "ID line" isn't a valid ID, treat both as unstructured text and preserve them
+            print(f"Warning: Could not parse ID from line: '{id_line}'. Preserving original lines.")
+            updated_lines.append(lines[i])
+            updated_lines.append(lines[param_line_idx])
+
+        # Jump index past the processed pair
+        i = param_line_idx + 1
+
+    # Write the updated content back to the file
     with open(prm_file_path, 'w') as f:
         f.writelines(updated_lines)
-    print(f"Updated {prm_file_path}: set Cr (param #13) to {cr_value} for all links.")
-
+        
+    print(f"Finished updating {prm_file_path}.")
 
 def create_meas_sav(test_dict: dict, model_link_ids: list) -> None:
     """
@@ -606,6 +690,7 @@ def create_batch_job_file(test_dict, tmp_dir: str) -> None:
         # f.write('#$ -pe orte 2\n') # 每个数组作业任务都会获得 2 个 slot，而不是整个数组任务共用 2 个 slot。
         f.write(f'#$ -pe {parallel_argument} {num_parallel_slots}\n')
         # f.write(f'#$ -pe smp {num_parallel_slots}\n')
+        # f.write('#$ -q AMCS\n')
         f.write('#$ -q IFC\n')
         f.write('#$ -cwd\n')
         f.write('#$ -o /dev/null\n')

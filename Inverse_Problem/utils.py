@@ -65,17 +65,23 @@ def time_to_epoch(time: str) -> float:
 def get_ids(test_dict: dict) -> List[int]:
     """
     Get the list of IDs from the PRM file specified in the test dictionary.
-
-    Args:
-        test_dict (dict): Test dictionary containing required parameters.
-
-    Returns:
-        List[int]: Sorted list of IDs extracted from the PRM file.
+    This version is more robust against formatting errors in the ID lines.
     """
     prm_name = test_dict['prm']
     with open(prm_name, 'r') as f:
         prm_lines = [line for line in f.readlines() if line.strip()]
-    id_list_prm = [int(i.strip('\n')) for i in prm_lines[1::2]]
+    
+    id_list_prm = []
+    # The lines with IDs should be at indices 1, 3, 5, ...
+    for line in prm_lines[1::2]:
+        try:
+            # Split the line by spaces and try to convert the first element to an integer
+            first_element = line.strip().split()[0]
+            id_list_prm.append(int(first_element))
+        except (ValueError, IndexError) as e:
+            # Handle cases where the line is empty, not a number, or has other issues
+            print(f"Warning: Could not parse an ID from line: '{line.strip()}'. Skipping. Error: {e}")
+            
     id_list = np.sort(id_list_prm)
     return id_list
 

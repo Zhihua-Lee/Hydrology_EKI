@@ -744,19 +744,19 @@ def main_visualization(test_dict):
                                                  post_param_array.shape[-1])
     iter_range_post = np.arange(0, num_assimilation_steps + 1)
     print("\n--- Generating Post-Assimilation Visualizations ---")
-    # generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
-    #                               plot_link_ids,
-    #                               observed_data_clean, time_axis,
-    #                               start_time_str, end_time_str, rain_dir,
-    #                               using_simulated_data, cr_ref_vec, # <-- Pass flags/values
-    #                               link_to_division_map, # <-- Pass the map
-    #                               assimilation_phase='post', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
-    # plot_parameter_evolution(post_param_array, active_param_indices, param_labels, param_ranges,
-    #                          plot_station_indices, # Pass station indices
-    #                          plot_link_ids,        # Pass corresponding link IDs
-    #                          assimilation_phase='post', visual_output_dir=visual_output_dir, iter_range=iter_range_post, 
-    #                          cr_ref_vec=cr_ref_vec,      # Pass the vector
-    #                          link_to_division_map=link_to_division_map) # Pass the map
+    generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
+                                  plot_link_ids,
+                                  observed_data_clean, time_axis,
+                                  start_time_str, end_time_str, rain_dir,
+                                  using_simulated_data, cr_ref_vec, # <-- Pass flags/values
+                                  link_to_division_map, # <-- Pass the map
+                                  assimilation_phase='post', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
+    plot_parameter_evolution(post_param_array, active_param_indices, param_labels, param_ranges,
+                             plot_station_indices, # Pass station indices
+                             plot_link_ids,        # Pass corresponding link IDs
+                             assimilation_phase='post', visual_output_dir=visual_output_dir, iter_range=iter_range_post, 
+                             cr_ref_vec=cr_ref_vec,      # Pass the vector
+                             link_to_division_map=link_to_division_map) # Pass the map
     plot_event_statistics('post', visual_output_dir, test_dict['out_dir'], test_dict,
                           plot_station_indices, plot_station_names, plot_link_ids)
     
@@ -777,19 +777,19 @@ def main_visualization(test_dict):
                                                    prior_param_array.shape[-1])
     iter_range_prior = np.arange(0, num_assimilation_steps)
     print("\n--- Generating Prior-Assimilation Visualizations ---")
-    # generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
-    #                               plot_link_ids,
-    #                               observed_data_clean, time_axis,
-    #                               start_time_str, end_time_str, rain_dir,
-    #                               using_simulated_data, cr_ref_vec, # Pass the vector
-    #                               link_to_division_map, # <-- Pass the map
-    #                               assimilation_phase='prior', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
-    # plot_parameter_evolution(prior_param_array, active_param_indices, param_labels, param_ranges,
-    #                          plot_station_indices, # Pass station indices
-    #                          plot_link_ids,        # Pass corresponding link IDs                             
-    #                          assimilation_phase='prior', visual_output_dir=visual_output_dir, iter_range=iter_range_prior, 
-    #                          cr_ref_vec=cr_ref_vec,      # Pass the vector
-    #                          link_to_division_map=link_to_division_map) # Pass the map
+    generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names,
+                                  plot_link_ids,
+                                  observed_data_clean, time_axis,
+                                  start_time_str, end_time_str, rain_dir,
+                                  using_simulated_data, cr_ref_vec, # Pass the vector
+                                  link_to_division_map, # <-- Pass the map
+                                  assimilation_phase='prior', visual_output_dir=visual_output_dir, out_dir=test_dict['out_dir'])
+    plot_parameter_evolution(prior_param_array, active_param_indices, param_labels, param_ranges,
+                             plot_station_indices, # Pass station indices
+                             plot_link_ids,        # Pass corresponding link IDs                             
+                             assimilation_phase='prior', visual_output_dir=visual_output_dir, iter_range=iter_range_prior, 
+                             cr_ref_vec=cr_ref_vec,      # Pass the vector
+                             link_to_division_map=link_to_division_map) # Pass the map
     plot_event_statistics('prior', visual_output_dir, test_dict['out_dir'], test_dict,
                           plot_station_indices, plot_station_names, plot_link_ids)
 
