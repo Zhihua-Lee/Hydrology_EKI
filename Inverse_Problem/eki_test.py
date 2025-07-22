@@ -220,7 +220,7 @@ def main(yaml_name):
         save_particles(test_dict, sparse_parent, X_post, Y_plot_post, name='npy/' + str(i) + "_post")
         save_statistics_csv(test_dict, sparse_parent, Y_plot_mean, Y_plot_std, X_post, name='csv/' + str(i) + "_post")
 
-    Visualization once EKI is done.
+    # Visualization once EKI is done.
     visualize.main_visualization(test_dict)
        
     

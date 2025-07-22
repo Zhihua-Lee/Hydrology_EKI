@@ -117,6 +117,13 @@ This algorithm segments a river network into distinct sub-watersheds. The proces
 
 This methodology results in multiple sets of watershed divisions, where the granularity and extent of the sub-watersheds vary depending on the stream order threshold used for filtering the network "joints."
 
+**Relationship Between Divisions**
+
+The resulting sub-watershed divisions from this algorithm will exhibit one of two relationships with each other:
+
+*   **Upstream-Downstream:** A new division is created by tracing all river links upstream from a "split point" on a larger, existing division. By definition, this new division flows directly into the division it was carved out from, establishing a clear hierarchical, upstream-downstream relationship.
+*   **Parallel:** When a major confluence is formed by two or more significant tributaries, the algorithm creates a separate, new division for each of these tributaries. These divisions are considered parallel as they are distinct, side-by-side branches that both flow into the same, single downstream division. Neither flows into the other.
+
 ---
 
 ### Visualization Results
