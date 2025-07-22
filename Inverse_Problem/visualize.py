@@ -24,6 +24,8 @@ from PIL import Image
 import hydroeval as he
 import copy
 import struct # <-- Added import
+from tqdm import tqdm
+import re
 
 import geopandas as gpd
 from utils import get_subwatershed, get_ids
@@ -502,7 +504,158 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, c
     plt.close(fig)
     print(f"Saved Cr map to {output_path}")
 
+
+def load_and_aggregate_rainfall_by_division(start_time_str, end_time_str, rain_dir, link_to_division_map):
+    """
+    Efficiently loads all rainfall data within a time window and aggregates it by sub-watershed division.
+    This function reads each binary rainfall file only once.
+    """
+    if not os.path.isdir(rain_dir):
+        print(f"Warning: Rainfall directory not found: {rain_dir}")
+        return {}
+
+    try:
+        start_time = pd.to_datetime(start_time_str)
+        end_time = pd.to_datetime(end_time_str)
+    except ValueError as e:
+        print(f"Error: Could not parse start/end time strings: {e}")
+        return {}
+
+    duration_hours = (end_time - start_time).total_seconds() / 3600.0
+    if duration_hours <= 0:
+        print(f"Warning: Time duration is non-positive ({duration_hours} hours). Cannot calculate average rate.")
+        # Return total accumulation instead of a meaningless rate
+        duration_hours = 1 
+
+    # --- Find all relevant rainfall files ---
+    files_to_process = []
+    years_in_range = {str(y) for y in range(start_time.year, end_time.year + 1)}
+    
+    # Check for yearly subdirectories
+    potential_year_dirs = [os.path.join(rain_dir, item) for item in os.listdir(rain_dir) if os.path.isdir(os.path.join(rain_dir, item)) and re.fullmatch(r'(19|20)\d{2}', item)]
+    
+    dirs_to_scan = [p for p in potential_year_dirs if os.path.basename(p) in years_in_range]
+    if not dirs_to_scan:
+        dirs_to_scan = [rain_dir] # Fallback to flat structure
+
+    for data_dir in dirs_to_scan:
+        for filename in os.listdir(data_dir):
+            if filename.isdigit():
+                timestamp = pd.to_datetime(int(filename), unit='s')
+                if start_time <= timestamp <= end_time:
+                    files_to_process.append(os.path.join(data_dir, filename))
+
+    if not files_to_process:
+        print("Warning: No rainfall files found in the specified time range.")
+        return {}
+
+    # --- Process files and aggregate rainfall ---
+    num_divisions = max(link_to_division_map.values()) + 1
+    division_rainfall_totals = np.zeros(num_divisions)
+    
+    print("Aggregating rainfall data by division...")
+    for file_path in tqdm(files_to_process):
+        try:
+            with open(file_path, "rb") as f:
+                raw_data = f.read()
+            
+            if len(raw_data) < 8: continue
+            raw_data = raw_data[4:] # Skip 4-byte header
+
+            for lid, rainfall in struct.iter_unpack("if", raw_data):
+                division_id = link_to_division_map.get(lid)
+                if division_id is not None:
+                    division_rainfall_totals[division_id] += rainfall
+        except Exception as e:
+            print(f"Warning: Could not process file {file_path}. Error: {e}")
+            
+    return {i: total / duration_hours for i, total in enumerate(division_rainfall_totals) if total > 0}
+
+
+def generate_rainfall_map(visual_output_dir, test_dict, model_link_ids, link_to_division_map):
+    """
+    Generates and saves a map of total rainfall distribution by division using an efficient aggregation method.
+    """
+    print("\n--- Generating Total Rainfall Map ---")
+    maps_dir = os.path.join(visual_output_dir, "rainfall_map")
+    clear_and_create_dir(maps_dir)
+
+    shapefile_path = test_dict.get('shapefile_path')
+    if not shapefile_path or not os.path.exists(shapefile_path):
+        print(f"Warning: Shapefile not found at {shapefile_path}. Skipping rainfall map generation.")
+        return
+
+    # --- Get time period for title ---
+    start_time_str = test_dict["time_start"]
+    end_time_str = test_dict["time_end"]
+
+    # --- Efficiently aggregate rainfall data ---
+    division_rainfall_totals = load_and_aggregate_rainfall_by_division(
+        test_dict["time_start"],
+        test_dict["time_end"],
+        test_dict['rain_dir'],
+        link_to_division_map
+    )
+
+    if not division_rainfall_totals:
+        print("Warning: No rainfall data could be aggregated. Skipping rainfall map.")
+        return
+
+    # Convert aggregated data to DataFrame
+    division_rainfall_rate = pd.DataFrame(list(division_rainfall_totals.items()), columns=['division_id', 'avg_rainfall_rate'])
+
+    # --- Load shapefile and merge data ---
+    gdf = gpd.read_file(shapefile_path)
+    gdf.rename(columns={'LINKNO': 'link_id'}, inplace=True)
+    gdf['link_id'] = gdf['link_id'].astype(int)
+
+    division_map_df = pd.DataFrame(list(link_to_division_map.items()), columns=['link_id', 'division_id'])
+    
+    gdf_with_divisions = gdf.merge(division_map_df, on='link_id', how='inner')
+    gdf_to_plot = gdf_with_divisions.merge(division_rainfall_rate, on='division_id', how='inner')
+
+    if gdf_to_plot.empty:
+        print("Warning: No matching geometries found for rainfall data. Skipping map generation.")
+        return
+
+    # --- Plotting ---
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    gdf_to_plot.plot(column='avg_rainfall_rate', ax=ax, legend=True,
+                     cmap='Blues',
+                     legend_kwds={'label': "Avg. Rainfall Rate by Division (mm/hr)",
+                                  'orientation': "vertical",
+                                  'shrink': 0.8})
+
+    links_per_division = pd.Series(link_to_division_map).value_counts()
+    dissolved = gdf_to_plot.dissolve(by='division_id', aggfunc={'avg_rainfall_rate': 'first'})
+    dissolved['point'] = dissolved.geometry.representative_point()
+    
+    for division_id, row in dissolved.iterrows():
+        point = row['point']
+        rain_rate = row.get('avg_rainfall_rate')
+        if pd.notna(rain_rate) and point:
+            num_links = links_per_division.get(division_id, 1) # Default to 1 to avoid errors
+            rate_density = rain_rate / num_links if num_links > 0 else 0
+            annotation_text = f"Total Rate: {rain_rate:.1f}\nDensity (by link): {rate_density:.2f}"
+            ax.text(point.x, point.y, annotation_text, fontsize=6, ha='center', va='center',
+                    bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7, ec='none'))
+
+    title = f"Spatially-Aggregated Average Rainfall Rate by Division\n({start_time_str} to {end_time_str})"
+    ax.set_title(title)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.set_axis_off()
+    plt.tight_layout()
+
+    output_path = os.path.join(maps_dir, "total_rainfall_map.png")
+    plt.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved rainfall map to {output_path}")
+
+
 # ===================== Main Visualization Function =====================
+
 def main_visualization(test_dict):
     """
     Main function to generate visualizations after the EKI algorithm finishes.
@@ -552,8 +705,11 @@ def main_visualization(test_dict):
 
     param_labels, param_ranges, active_param_indices = ["$Cr$"], [[0.00, 2.5]], [0]
 
-    # --- Post Assimilation ---
+    # --- Generate Maps (as they are independent of prior/post phase) ---
     generate_cr_map('post', visual_output_dir, test_dict['out_dir'], test_dict, cr_ref_vec)
+    generate_rainfall_map(visual_output_dir, test_dict, model_link_ids_temp, link_to_division_map)
+
+    # --- Post Assimilation ---
     post_param_list = []
     for i in range(num_assimilation_steps + 1):
         file_path = os.path.join(test_dict['out_dir'], f'npy/{i-1}_post_params_particles.npy') if i > 0 else os.path.join(test_dict['out_dir'], 'npy/0_prior_params_particles.npy')
