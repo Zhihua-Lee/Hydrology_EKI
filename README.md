@@ -184,10 +184,36 @@ This visualization directly shows how effectively the EKI process constrains the
 
 #### `maps/`
 
-This folder addresses a limitation of the previous plots: the lack of spatial context. While the parameter and hydrograph plots are viewed "by element" or "by station," the map visualization allows us to investigate the spatial patterns of the solution. The automated map generation is based on the logic from the `visualize_cr_map.ipynb` notebook.
+This directory contains three distinct maps that provide critical spatial context for the model inputs, outputs, and performance. They transform the element-wise and station-based plots into a geographic view of the watershed.
 
-The map displays the final calibrated `Cr` parameter values (from the last `post` assimilation iteration) on the river network, with each link color-coded according to its `Cr` value. This helps to answer questions about the spatial influence on the inverse problem's solution.
+*   **`final_cr_map_post.png` (Parameter Distribution Map)**: This map visualizes the final calibrated `Cr` parameter values from the last EKI iteration, along with key performance and convergence diagnostics.
+    *   **Purpose**: To understand the spatial patterns of the calibrated parameters, identify potential spatial biases, and diagnose the convergence speed and stability across different sub-watersheds.
+    *   **Interpretation**: The map has two modes, with each division's geographic area containing a detailed annotation box:
+        *   **Real-Data Mode**: The annotation for each division includes **four** key metrics:
+            1.  **EKI Mean**: The final calibrated mean `Cr` value.
+            2.  **EKI Std**: The final standard deviation, indicating the uncertainty of the estimate.
+            3.  **Conv. (Abs)**: The iteration at which the ensemble `std` first dropped below an absolute threshold (e.g., 0.05) and remained there.
+            4.  **Conv. (Rel)**: The iteration at which the `std` stabilized, indicating the point of relative convergence.
+        *   **Simulated-Data Mode**: The annotation for each division is expanded to **six** metrics for a more comprehensive diagnostic:
+            1.  **True Value**: The ground truth `Cr` value for that division.
+            2.  **EKI Mean**: The final calibrated mean `Cr` value.
+            3.  **Mean Rel. Err**: The percentage error between the mean and the true value.
+            4.  **EKI Std**: The final standard deviation of the estimate.
+            5.  **Conv. (Abs)**: The iteration for absolute convergence.
+            6.  **Conv. (Rel)**: The iteration for relative convergence/stabilization.
 
-The map has two distinct modes:
-1.  **Absolute Value Mode**: In a real-data experiment, the map shows the spatial distribution of the final calibrated `Cr` values. This can reveal which parts of the watershed require higher or lower runoff coefficients to match observations.
-2.  **Error Mode**: In a simulated-data experiment (`using_simulated_data: true`), the map shows the **error** in the estimated parameter (`Cr_calibrated - Cr_ref`). This is a powerful diagnostic tool for identifying spatial biases in the parameter estimation. For example, it can show if the EKI systematically over- or underestimates parameters in certain geographic areas (e.g., upstream vs. downstream, or in specific tributaries), providing clues about the problem's structural challenges.
+*   **`hydrograph_metric_map_post.png` (Hydrograph Performance Map)**: This map displays the locations of all monitored USGS gauges on the river network and provides a detailed, quantitative assessment of the final model's performance at each site.
+    *   **Purpose**: To spatially evaluate the model's accuracy and uncertainty across the entire watershed, not just at the assimilation point.
+    *   **Interpretation**:
+        *   Gauges are marked differently based on their role: **Assimilation Gauge** (cyan), **Downstream Outlet** (yellow star), and **Verification Gauges** (red).
+        *   Each gauge is annotated with a detailed box of performance metrics calculated from the final hydrograph, including:
+            *   Average relative error over the entire time series.
+            *   Maximum ensemble standard deviation (a measure of final uncertainty).
+            *   Average relative error for five key event-based metrics (Peak, Mean, Std Dev, etc.), offering a granular look at event performance.
+
+*   **`total_rainfall_map.png` (Rainfall Distribution Map)**: This map, located in its own `rainfall_map` sub-directory, visualizes the primary input driving the model: the rainfall.
+    *   **Purpose**: To provide spatial context for the hydrological forcing and to help interpret the resulting `Cr` parameter map.
+    *   **Interpretation**:
+        *   The map shows the **average rainfall rate (mm/hr)** for each sub-watershed division over the entire simulation period, calculated by aggregating data from numerous individual rainfall files.
+        *   Each division is colored according to its average rainfall rate (using a 'Blues' colormap) and annotated with the rate value.
+        *   This allows for visual correlation analysis: for example, do areas with higher rainfall rates consistently result in higher or lower calibrated `Cr` values?

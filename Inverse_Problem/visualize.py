@@ -421,7 +421,7 @@ def plot_event_statistics(assimilation_phase, visual_output_dir, out_dir, test_d
         print(f"  - Saved consolidated evolution plot for Station {station_name}")
 
 # ===================== Geographic Map Generation Function =====================
-def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, cr_ref_vec=None):
+def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, post_param_array=None, cr_ref_vec=None):
     """
     Generates and saves a map of Cr values or Cr error, with robust data handling and detailed annotations.
     """
@@ -429,6 +429,47 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, c
     print("\n--- Generating Final Cr Parameter Map ---")
     maps_dir = os.path.join(visual_output_dir, assimilation_phase, "maps")
     clear_and_create_dir(maps_dir)
+
+    # --- ADDED: Calculate convergence metrics if full parameter history is provided ---
+    convergence_metrics = {}
+    if assimilation_phase == 'post' and post_param_array is not None and post_param_array.ndim == 4:
+        print("  Calculating parameter convergence metrics...")
+        # Shape: (iterations, params, divisions, particles)
+        num_iterations, _, num_divisions, _ = post_param_array.shape
+        # Assuming we are analyzing the first parameter (index 0)
+        param_data = post_param_array[:, 0, :, :] # Shape: (iterations, divisions, particles)
+        
+        for div_id in range(num_divisions):
+            std_over_time = np.std(param_data[:, div_id, :], axis=1)
+
+            # 1. Iter to Absolute Convergence (std < 0.05)
+            abs_conv_thresh = 0.05
+            abs_conv_indices = np.where(std_over_time < abs_conv_thresh)[0]
+            iter_abs_conv = abs_conv_indices[0] if len(abs_conv_indices) > 0 else "N/A"
+
+            # 2. Iter to Stabilize (based on relative change in std)
+            iter_stabilize = "N/A"
+            window_size = 2
+            tolerance = 0.01
+            if len(std_over_time) > window_size:
+                # Use np.diff to get change, handle potential division by zero
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    rel_change = np.abs(np.diff(std_over_time) / std_over_time[:-1])
+                # A large value for invalid results will cause the check to fail, which is desired.
+                rel_change[np.isinf(rel_change) | np.isnan(rel_change)] = np.inf
+
+                # Find the first window of consecutive changes below the tolerance
+                for k in range(len(rel_change) - window_size + 1):
+                    window = rel_change[k : k + window_size]
+                    if np.all(window < tolerance):
+                        # The stable plateau begins at iteration k, as the change from k -> k+1 is small.
+                        iter_stabilize = k
+                        break
+            
+            convergence_metrics[div_id] = {
+                'abs_conv': iter_abs_conv,
+                'stabilize': iter_stabilize
+            }
 
     shapefile_path = test_dict.get('shapefile_path')
     if not shapefile_path or not os.path.exists(shapefile_path):
@@ -501,10 +542,12 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, c
         cmap = plt.get_cmap('Reds', len(active_categories))
         gdf_to_plot.plot(ax=ax, column=plot_col, cmap=cmap, legend=True,
                          legend_kwds={'title': cbar_label, 'loc': 'upper left', 'bbox_to_anchor': (1, 1)},
-                         categorical=True, missing_kwds={"color": "lightgrey", "label": "No Data"})
+                         categorical=True, missing_kwds={"color": "lightgrey", "label": "No Data"},
+                         zorder=1)
     else:
         gdf_to_plot.plot(column=plot_col, ax=ax, legend=True,
-                         legend_kwds={'label': cbar_label, 'orientation': "horizontal"})
+                         legend_kwds={'label': cbar_label, 'orientation': "horizontal"},
+                         zorder=1)
 
     if 'division_id' in gdf_to_plot.columns:
         agg_dict = {'Cr_mean': 'first', 'Cr_std': 'first'}
@@ -512,28 +555,46 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, c
             agg_dict['Cr_ref'] = 'first'
         dissolved = gdf_to_plot.dissolve(by='division_id', aggfunc=agg_dict)
         dissolved['point'] = dissolved.geometry.representative_point()
-        
-        for _, row in dissolved.iterrows():
+        texts = []
+
+        for division_id, row in dissolved.iterrows():
             point = row['point']
             cr_mean = row.get('Cr_mean')
+            conv_data = convergence_metrics.get(division_id, {})
             if pd.notna(cr_mean) and point:
-                annotation_text = ""
+                annotation_text_lines = []
                 if is_simulated:
                     cr_ref = row.get('Cr_ref')
                     cr_std = row.get('Cr_std')
                     rel_error = ((cr_mean - cr_ref) / cr_ref) * 100 if cr_ref != 0 else np.inf
-                    annotation_text = (f"True Value: {cr_ref:.2f}\n"
-                                       f"EKI Mean: {cr_mean:.2f}\n"
-                                       f"Mean Rel. Err: {rel_error:.1f}%\n")
-                    annotation_text += f"EKI Std: {cr_std:.2f}" if pd.notna(cr_std) else "EKI Std: N/A"
+                    annotation_text_lines.append(f"True Value: {cr_ref:.2f}")
+                    annotation_text_lines.append(f"EKI Mean: {cr_mean:.2f}")
+                    annotation_text_lines.append(f"Mean Rel. Err: {rel_error:.1f}%")
+                    annotation_text_lines.append(f"EKI Std: {cr_std:.2f}" if pd.notna(cr_std) else "EKI Std: N/A")
                 else:
                     cr_std = row.get('Cr_std')
-                    annotation_text = f"EKI Mean: {cr_mean:.2f}"
+                    annotation_text_lines.append(f"EKI Mean: {cr_mean:.2f}")
                     if pd.notna(cr_std):
-                        annotation_text += f"\nEKI Std: {cr_std:.2f}"
+                        annotation_text_lines.append(f"EKI Std: {cr_std:.2f}")
 
-                ax.text(row.point.x, row.point.y, annotation_text, fontsize=6, ha='center', va='center',
-                        bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7, ec='none'))
+                # ADD convergence metrics
+                iter_abs_conv = conv_data.get('abs_conv', "N/A")
+                iter_stabilize = conv_data.get('stabilize', "N/A")
+                annotation_text_lines.append(f"Iter to Abs. Conv.: {iter_abs_conv}")
+                annotation_text_lines.append(f"Iter to Stabilize: {iter_stabilize}")
+                annotation_text = "\n".join(annotation_text_lines)
+
+                texts.append(ax.text(row.point.x, row.point.y, annotation_text, fontsize=6, ha='center', va='center',
+                                    bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.8, ec='none'), zorder=3))
+        
+        if texts:
+            adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', color='black', lw=0.5, zorder=2))
+
+    # Add annotation for hyperparameter definition
+    hyperparam_text = "Note: 'Iter to Abs. Conv.' is the first iteration\nwhere the parameter ensemble std < 0.05."
+    ax.text(0.99, 0.01, hyperparam_text, transform=ax.transAxes, fontsize=7,
+            verticalalignment='bottom', horizontalalignment='right',
+            bbox=dict(boxstyle='round,pad=0.3', fc='lightyellow', alpha=0.9, ec='grey'))
     
     ax.set_title(plot_title)
     ax.set_xlabel("Longitude")
@@ -939,12 +1000,6 @@ def main_visualization(test_dict):
 
     param_labels, param_ranges, active_param_indices = ["$Cr$"], [[0.00, 2.5]], [0]
 
-    # --- Generate Maps (as they are independent of prior/post phase) ---
-    generate_cr_map('post', visual_output_dir, test_dict['out_dir'], test_dict, cr_ref_vec)
-    generate_hydrograph_metric_map('post', visual_output_dir, test_dict['out_dir'], test_dict, observed_data_clean,
-                                   plot_station_indices, plot_station_names, model_link_ids_temp, plot_link_ids)
-    generate_rainfall_map(visual_output_dir, test_dict, model_link_ids_temp, link_to_division_map)
-
     # --- Post Assimilation ---
     post_param_list = []
     for i in range(num_assimilation_steps + 1):
@@ -953,7 +1008,13 @@ def main_visualization(test_dict):
             post_param_list.append(np.load(f))
     post_param_array = np.stack(post_param_list, axis=0).reshape(num_assimilation_steps + 1, len(active_param_indices), -1, post_param_list[0].shape[-1])
     iter_range_post = np.arange(0, num_assimilation_steps + 1)
-    
+
+    # --- Generate Maps (as they are independent of prior/post phase) ---
+    generate_cr_map('post', visual_output_dir, test_dict['out_dir'], test_dict, post_param_array, cr_ref_vec)
+    generate_hydrograph_metric_map('post', visual_output_dir, test_dict['out_dir'], test_dict, observed_data_clean,
+                                   plot_station_indices, plot_station_names, model_link_ids_temp, plot_link_ids)
+    generate_rainfall_map(visual_output_dir, test_dict, model_link_ids_temp, link_to_division_map)
+
     print("\n--- Generating Post-Assimilation Visualizations ---")
     generate_hydrograph_animation(num_assimilation_steps, plot_station_indices, plot_station_names, plot_link_ids,
                                   observed_data_clean, time_axis, start_time_str, end_time_str, rain_dir,
