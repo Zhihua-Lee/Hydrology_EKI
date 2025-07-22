@@ -26,6 +26,11 @@ import copy
 import struct # <-- Added import
 from tqdm import tqdm
 import re
+import requests
+import time
+import matplotlib.patheffects as pe
+from adjustText import adjust_text
+
 
 import geopandas as gpd
 from utils import get_subwatershed, get_ids
@@ -58,6 +63,43 @@ def peak_relative_diff(obs, sim):
 def peak_timing_diff(obs, sim):
     """Calculate the difference in index (timing) where simulated and observed data reach their peaks."""
     return np.argmax(sim) - np.argmax(obs)
+
+# --- Helper Function to Fetch USGS Gauge Coordinates (from catchment_maps.py) ---
+def get_usgs_coords(usgs_id):
+    """Fetches latitude and longitude for a given USGS gauge ID from NWIS."""
+    usgs_id_str = str(usgs_id).zfill(8)
+    url = f"https://waterservices.usgs.gov/nwis/site/?format=rdb&sites={usgs_id_str}&siteOutput=expanded&siteStatus=all"
+    # print(f"  Fetching coordinates for {usgs_id_str}...")
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        lat, lon = None, None
+        lines = r.text.splitlines()
+        content_lines = [line for line in lines if not line.startswith('#') and line.strip()]
+        if len(content_lines) < 3:
+             # print(f"  Warning: Unexpected RDB format or no data returned for {usgs_id_str}. Found {len(content_lines)} content lines.")
+             return None, None
+        header_line, data_line = content_lines[0], content_lines[2]
+        header, values = header_line.split('\t'), data_line.split('\t')
+        lat_col_name, lon_col_name = 'dec_lat_va', 'dec_long_va'
+        try:
+            lat_idx, lon_idx = header.index(lat_col_name), header.index(lon_col_name)
+        except ValueError:
+            # print(f"  Warning: Could not find '{lat_col_name}' or '{lon_col_name}' columns in RDB header for {usgs_id_str}.")
+            return None, None
+        if lat_idx < len(values) and lon_idx < len(values):
+            lat_str, lon_str = values[lat_idx], values[lon_idx]
+            try:
+                if lat_str.strip() and lon_str.strip():
+                    lat, lon = float(lat_str), float(lon_str)
+                    return lat, lon
+                # else: print(f"  Warning: Empty lat/lon value found for {usgs_id_str}.")
+            except ValueError: print(f"  Warning: Could not parse lat/lon float for {usgs_id_str}. Values: '{lat_str}', '{lon_str}'")
+        # else: print(f"  Warning: Lat/lon indices ({lat_idx}, {lon_idx}) out of bounds for data line len ({len(values)}) for {usgs_id_str}")
+        return None, None
+    except requests.exceptions.RequestException as e: print(f"  Error during API request for {usgs_id_str}: {e}")
+    except Exception as e: print(f"  Unexpected error processing coords for {usgs_id_str}: {type(e).__name__} - {e}")
+    return None, None
 
 # ===================== Animation Frame Drawing Function =====================
 def draw_animation_frame(iter_idx, ensemble_sim, station_idx, time_axis,
@@ -504,6 +546,198 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, c
     plt.close(fig)
     print(f"Saved Cr map to {output_path}")
 
+def generate_hydrograph_metric_map(assimilation_phase, visual_output_dir, out_dir, test_dict, observed_data,
+                                   plot_station_indices, plot_station_names, model_link_ids, plot_link_ids):
+    """
+    Generates a map showing the flowline network, gauge locations, and key performance metrics at each gauge.
+    """
+    if assimilation_phase != 'post': return
+    print("\n--- Generating Hydrograph & Metric Map ---")
+    maps_dir = os.path.join(visual_output_dir, assimilation_phase, "maps")
+    os.makedirs(maps_dir, exist_ok=True)
+
+    shapefile_path = test_dict.get('shapefile_path')
+    if not shapefile_path or not os.path.exists(shapefile_path):
+        print(f"Warning: Shapefile not found at {shapefile_path}. Skipping metric map generation.")
+        return
+
+    # --- Define key gauge IDs ---
+    all_gauge_ids_to_plot = list(dict.fromkeys(test_dict.get("plot_usgs", []))) # Remove duplicates
+    assimilation_gauge_id = str(test_dict.get("meas_usgs")).strip()
+    most_downstream_gauge_id = str('05583000').strip() # As per reference catchment_maps.py
+
+    # --- Fetch gauge coordinates ---
+    gauge_data_list = []
+    print("Fetching gauge coordinates via USGS API for metric map...")
+    for gauge_id in all_gauge_ids_to_plot:
+        lat, lon = get_usgs_coords(gauge_id)
+        if lat is not None and lon is not None:
+            gauge_data_list.append({'gauge_id': str(gauge_id).strip(), 'lat': lat, 'lon': lon})
+        else:
+            print(f"  Failed to retrieve coordinates for gauge: {gauge_id}")
+        time.sleep(0.1)
+    
+    if not gauge_data_list:
+        print("Could not fetch any gauge coordinates. Skipping metric map.")
+        return
+
+    gauge_points = gpd.GeoDataFrame(
+        pd.DataFrame(gauge_data_list),
+        geometry=gpd.points_from_xy(pd.DataFrame(gauge_data_list).lon, pd.DataFrame(gauge_data_list).lat),
+        crs="EPSG:4326"
+    )
+    
+    # --- Load final simulation results ---
+    last_iter_idx = test_dict['steps'] - 1
+    if last_iter_idx < 0: return
+    final_sim_file = os.path.join(out_dir, "npy", f"{last_iter_idx}_post_particles.npy")
+    if not os.path.exists(final_sim_file):
+        print(f"Final simulation file not found: {final_sim_file}. Skipping metric map.")
+        return
+    final_sim_ensemble = np.load(final_sim_file)
+    final_sim_median = np.median(final_sim_ensemble, axis=0)
+
+    # --- Calculate detailed error metrics for each gauge ---
+    metrics_data = {}
+    event_params = test_dict.get('event_finding', {})
+    min_dist, min_thresh_pct, min_length = event_params.get('min_dist', 24), event_params.get('min_thresh_pct', 25), event_params.get('min_length', 72)
+
+    for i, station_id_str in enumerate(plot_station_names):
+        station_idx = plot_station_indices[i]
+        obs_series = observed_data[:, station_idx]
+        sim_median_series = final_sim_median[:, station_idx]
+        sim_ensemble_series = final_sim_ensemble[:, :, station_idx]
+
+        # 1. Hydrograph series relative error
+        with np.errstate(divide='ignore', invalid='ignore'):
+            valid_obs_mask = obs_series > 0.1 # Avoid division by zero or tiny numbers
+            series_rel_err = np.abs((sim_median_series[valid_obs_mask] - obs_series[valid_obs_mask]) / obs_series[valid_obs_mask])
+            avg_series_rel_err = np.nanmean(series_rel_err)
+
+        # 2. Max hydrograph ensemble std
+        max_ensemble_std = np.nanmax(np.std(sim_ensemble_series, axis=0))
+
+        # 3. Metric relative errors (averaged over events)
+        min_thresh_val = np.percentile(obs_series[obs_series > 0], min_thresh_pct) if np.any(obs_series > 0) else 0
+        event_indices_list, _ = find_events(obs_series, min_dist, min_thresh_val, min_length)
+
+        metric_names = ['Peak', 'Mean', 'Std_Dev', 'Timing_Mean', 'Timing_Std_Dev']
+        metric_rel_errors = {name: [] for name in metric_names}
+        avg_metric_rel_errors = {name: np.nan for name in metric_names}
+
+        if event_indices_list:
+            for event_indices in event_indices_list:
+                obs_event_data = obs_series[event_indices]
+                sim_event_data = sim_median_series[event_indices]
+
+                _, obs_y_max, obs_y_mean, _, _, _, obs_y_std, obs_y_mean_time, obs_y_std_time = find_metric_values([event_indices], [obs_event_data])
+                obs_metrics = {'Peak': obs_y_max[0][0], 'Mean': obs_y_mean[0][0], 'Std_Dev': obs_y_std[0][0], 'Timing_Mean': obs_y_mean_time[0][0], 'Timing_Std_Dev': obs_y_std_time[0][0]}
+
+                _, sim_y_max, sim_y_mean, _, _, _, sim_y_std, sim_y_mean_time, sim_y_std_time = find_metric_values([event_indices], [sim_event_data])
+                sim_metrics = {'Peak': sim_y_max[0][0], 'Mean': sim_y_mean[0][0], 'Std_Dev': sim_y_std[0][0], 'Timing_Mean': sim_y_mean_time[0][0], 'Timing_Std_Dev': sim_y_std_time[0][0]}
+
+                for name in metric_names:
+                    obs_val, sim_val = obs_metrics.get(name), sim_metrics.get(name)
+                    if obs_val is not None and sim_val is not None and obs_val != 0:
+                        rel_err = np.abs((sim_val - obs_val) / obs_val)
+                        metric_rel_errors[name].append(rel_err)
+                    else:
+                        metric_rel_errors[name].append(np.nan)
+            
+            for name in metric_names:
+                if metric_rel_errors[name]:
+                    avg_metric_rel_errors[name] = np.nanmean(metric_rel_errors[name])
+                
+        metrics_data[station_id_str] = {
+            'AvgSeriesRelErr': avg_series_rel_err,
+            'MaxEnsembleStd': max_ensemble_std,
+            'AvgMetricRelErr': avg_metric_rel_errors
+        }
+
+    # --- Plot the map ---
+    fig, ax = plt.subplots(1, 1, figsize=(12, 10))
+    network_gdf = gpd.read_file(shapefile_path)
+
+    if 'LINKNO' in network_gdf.columns:
+        network_gdf.rename(columns={'LINKNO': 'link_id'}, inplace=True)
+        network_gdf['link_id'] = network_gdf['link_id'].astype(int)
+        network_gdf = network_gdf[network_gdf['link_id'].isin(model_link_ids)]
+    else:
+        print("Warning: Shapefile is missing 'LINKNO' column. Cannot filter network.")
+
+    network_gdf = network_gdf.to_crs("EPSG:4326") # Ensure CRS matches gauge points
+    network_gdf.plot(ax=ax, lw=0.7, color="blue", zorder=3)
+
+    # Set map extent
+    bounds = network_gdf.total_bounds
+    buffer = 0.05
+    ax.set_xlim(bounds[0] - buffer, bounds[2] + buffer)
+    ax.set_ylim(bounds[1] - buffer, bounds[3] + buffer)
+
+    # Plot gauge points
+    path_effects = [pe.withStroke(linewidth=3, foreground="white")]
+    
+    # Plot non-special gauges first
+    other_gauges = gauge_points[~gauge_points['gauge_id'].isin([assimilation_gauge_id, most_downstream_gauge_id])]
+    if not other_gauges.empty:
+        other_gauges.plot(ax=ax, marker='o', color='red', markersize=40, edgecolor='black', zorder=5, label='Verification Gauge')
+
+    # Plot assimilation gauge
+    assim_gauge_plot = gauge_points[gauge_points['gauge_id'] == assimilation_gauge_id]
+    if not assim_gauge_plot.empty:
+         assim_gauge_plot.plot(ax=ax, marker='o', color='cyan', markersize=60, edgecolor='black', zorder=5, label='Assimilation Gauge')
+
+    # Plot the most downstream gauge with a star on top
+    downstream_gauge = gauge_points[gauge_points['gauge_id'] == most_downstream_gauge_id]
+    if not downstream_gauge.empty:
+        downstream_gauge.plot(ax=ax, marker='*', color='yellow', markersize=200, edgecolor='black', zorder=6, label='Downstream Outlet')
+
+    # Add annotations
+    texts = []
+    for _, row in gauge_points.iterrows():
+        gauge_id = row.gauge_id
+        metrics = metrics_data.get(gauge_id)
+        if metrics:
+            # Pre-format strings to avoid ValueError with f-string conditional format specifiers
+            metric_errs = metrics['AvgMetricRelErr']
+            avg_series_rel_err_str = f"{metrics['AvgSeriesRelErr']:.2%}" if pd.notna(metrics['AvgSeriesRelErr']) else 'N/A'
+            peak_err_str = f"{metric_errs['Peak']:.2%}" if pd.notna(metric_errs['Peak']) else 'N/A'
+            mean_err_str = f"{metric_errs['Mean']:.2%}" if pd.notna(metric_errs['Mean']) else 'N/A'
+            std_dev_err_str = f"{metric_errs['Std_Dev']:.2%}" if pd.notna(metric_errs['Std_Dev']) else 'N/A'
+            timing_mean_err_str = f"{metric_errs['Timing_Mean']:.2%}" if pd.notna(metric_errs['Timing_Mean']) else 'N/A'
+            timing_std_dev_err_str = f"{metric_errs['Timing_Std_Dev']:.2%}" if pd.notna(metric_errs['Timing_Std_Dev']) else 'N/A'
+
+            annotation_text = (
+                f"Gauge: {gauge_id}\n"
+                f"--------------------------\n"
+                f"Avg. Series Rel. Err: {avg_series_rel_err_str}\n"
+                f"Max Ens. Std: {metrics['MaxEnsembleStd']:.2f}\n"
+                f"Event Metric Avg. Rel. Err:\n"
+                f"  - Peak: {peak_err_str}\n"
+                f"  - Mean: {mean_err_str}\n"
+                f"  - Std Dev: {std_dev_err_str}\n"
+                f"  - Timing Mean: {timing_mean_err_str}\n"
+                f"  - Timing Std Dev: {timing_std_dev_err_str}"
+            )
+            texts.append(ax.text(row.geometry.x, row.geometry.y, annotation_text, fontsize=7,
+                                 bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.8, ec='gray', lw=0.5),
+                                 path_effects=path_effects, zorder=10))
+    
+    if texts:
+        adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', color='black', lw=0.5, relpos=(0.5, 0.5)))
+    
+    ax.set_title(f"Flowline Network, Gauges & Final Hydrograph Error Analysis ({assimilation_phase})")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.grid(True, linestyle='--', alpha=0.5)
+    ax.legend(loc='best')
+    plt.tight_layout()
+
+    output_path = os.path.join(maps_dir, f"hydrograph_metric_map_{assimilation_phase}.png")
+    plt.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved hydrograph metric map to {output_path}")
+
 
 def load_and_aggregate_rainfall_by_division(start_time_str, end_time_str, rain_dir, link_to_division_map):
     """
@@ -707,6 +941,8 @@ def main_visualization(test_dict):
 
     # --- Generate Maps (as they are independent of prior/post phase) ---
     generate_cr_map('post', visual_output_dir, test_dict['out_dir'], test_dict, cr_ref_vec)
+    generate_hydrograph_metric_map('post', visual_output_dir, test_dict['out_dir'], test_dict, observed_data_clean,
+                                   plot_station_indices, plot_station_names, model_link_ids_temp, plot_link_ids)
     generate_rainfall_map(visual_output_dir, test_dict, model_link_ids_temp, link_to_division_map)
 
     # --- Post Assimilation ---
