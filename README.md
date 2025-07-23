@@ -36,7 +36,7 @@ This project provides a scientific computing framework for hydrological data ass
     *   To **only** regenerate visualizations from a completed experiment's output, set `VISUALIZE_ONLY` to `true`.
     ```bash
     cd Inverse_Problem
-    ./main.sh
+    bash main.sh
     ```
     Alternatively, you can run `eki_test.py` directly and control the behavior with a command-line flag:
     ```bash
