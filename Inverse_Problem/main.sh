@@ -1,3 +1,10 @@
+#!/bin/bash
+
+# --- Configuration ---
+# Set to true to skip the EKI run and only generate visualizations from existing output.
+# Set to false to run the full EKI experiment.
+VISUALIZE_ONLY=false
+
 # IDAS or Argon doesn't allow user to run .sh files via ".\xxx.sh" directly;
 # So just copy them to terminal in Argon and run
 
@@ -14,8 +21,16 @@ qstat -f -q IFC -u zli333
 
 # Modify the parameters in `config.j2` as desired
 
+# --- Execution ---
+CMD="~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/eki_test.py ~/DA/2025_EKI/Inverse_Problem/config.j2"
+
+if [ "$VISUALIZE_ONLY" = true ]; then
+  CMD="$CMD --visualize-only"
+fi
+
 # Submit the job to Argon to run
-~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/eki_test.py ~/DA/2025_EKI/Inverse_Problem/config.j2 
+echo "Executing command: $CMD"
+eval $CMD
 
 # Cr scan job to plot Cr-hydrograph curve
-~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/cr_scan.py ~/DA/2025_EKI/Inverse_Problem/config.j2
+# ~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/cr_scan.py ~/DA/2025_EKI/Inverse_Problem/config.j2

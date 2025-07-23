@@ -1,0 +1,49 @@
+--- /home/zli333/hpchome/DA/2025_EKI/README.md	2025-07-22 16:49:26.096439373 -0500
++++ /dev/fd/63	2025-07-23 12:46:53.499485608 -0500
+@@ -32,10 +32,17 @@
+ 
+ 1.  **Configure:** Modify the `Inverse_Problem/config.j2` template to define the parameters for your experiment (e.g., target gauge, time windows, EKI settings).
+ 2.  **Execute:** The primary script to launch a run is `Inverse_Problem/main.sh`.
++    *   To run a full experiment (EKI calculations + visualization), ensure `VISUALIZE_ONLY` is set to `false` inside `main.sh`.
++    *   To **only** regenerate visualizations from a completed experiment's output, set `VISUALIZE_ONLY` to `true`.
+     ```bash
+     cd Inverse_Problem
+     ./main.sh
+     ```
++    Alternatively, you can run `eki_test.py` directly and control the behavior with a command-line flag:
++    ```bash
++    python eki_test.py config.j2 # Full run
++    python eki_test.py config.j2 --visualize-only # Visualization only
++    ```
+ 3.  **View Results:** All outputs, including logs, parameter data, and visualizations, are saved in the `Inverse_Problem/out/` directory, organized by experiment.
+ 
+ ## Project Structure
+@@ -217,3 +224,28 @@
+         *   The map shows the **average rainfall rate (mm/hr)** for each sub-watershed division over the entire simulation period, calculated by aggregating data from numerous individual rainfall files.
+         *   Each division is colored according to its average rainfall rate (using a 'Blues' colormap) and annotated with the rate value.
+         *   This allows for visual correlation analysis: for example, do areas with higher rainfall rates consistently result in higher or lower calibrated `Cr` values?
++
++
++### `cr_scan.py`
++
++This script is a diagnostic tool designed to analyze the sensitivity of a hydrological model's output (specifically, the simulated hydrograph) to a single, globally applied parameter: the runoff coefficient (`Cr`). It systematically runs the model across a range of `Cr` values and plots the resulting hydrographs against observed data.
++
++**Purpose**:
++The primary goal is to understand the model's response to `Cr` at a specific location (gauge). This helps in:
++1.  **Parameter Bounding**: Determining a reasonable range for `Cr` before running a full EKI experiment. If the simulated hydrograph is consistently too high or too low even at the extremes of the scanned range, it might indicate issues with other model inputs or structure.
++2.  **Sensitivity Analysis**: Visually assessing how much the hydrograph changes for a given change in `Cr`. If the hydrograph is insensitive to `Cr`, it suggests that this parameter may be difficult to identify (i.e., the inverse problem is ill-posed).
++3.  **Model Behavior Diagnosis**: Identifying non-linearities or unexpected model behavior across the parameter space.
++
++**Methodology**:
++1.  **Configuration**: The script uses the same `config.j2` file as the main EKI experiment to ensure consistency in model setup (e.g., forcing data, simulation period).
++2.  **Parameter Range**: It defines a linear space of `Cr` values to test (e.g., from 0.05 to 0.95 with 19 steps).
++3.  **Iterative Simulation**: The script loops through each `Cr` value in the defined range. In each iteration:
++    *   It sets the `Cr` parameter globally for all river links in the model.
++    *   It runs a full hydrological simulation using the `run_test` function.
++    *   It extracts the simulated hydrograph at the specified gauge location.
++4.  **Visualization**: After all simulations are complete, it generates a single plot containing:
++    *   The observed hydrograph (from real-world data).
++    *   All of the simulated hydrographs, with each line colored according to its corresponding `Cr` value. A color bar is included to map colors to `Cr` values.
++    *   Rainfall data is typically plotted on a secondary y-axis for context.
++
++The output plot is saved in the `out/` directory, providing a clear visual summary of the model's sensitivity to the `Cr` parameter.

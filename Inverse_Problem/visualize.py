@@ -195,24 +195,23 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, plo
     hydrograph_anim_dir = os.path.join(visual_output_dir, assimilation_phase, "hydrograph", "animation")
     clear_and_create_dir(hydrograph_frames_dir)
     clear_and_create_dir(hydrograph_anim_dir)
-
+    
+    print(f"\n--- Generating {assimilation_phase.title()} Hydrograph Animations ---")
     iter_range = range(num_iters + 1) if assimilation_phase == 'post' else range(num_iters)
 
-    for i, station_idx in enumerate(station_indices):
+    # Use tqdm for a compact progress bar over stations
+    for i, station_idx in enumerate(tqdm(station_indices, desc=f"Processing Stations ({assimilation_phase})")):
         station_label = station_names[i]
         target_lid = plot_link_ids[i]
 
-        print(f"\nProcessing Gauge: {station_label} (LID: {target_lid}) for {assimilation_phase} phase...")
         rain_df = get_rainfall_for_lid_from_config(target_lid, start_time_str, end_time_str, rain_dir)
 
         cr_ref_for_station = None
         if using_simulated_data and cr_ref_vec is not None and link_to_division_map is not None:
             division_id = link_to_division_map.get(target_lid)
-            if division_id is not None:
-                cr_ref_for_station = cr_ref_vec[division_id]
-            else:
-                print(f"Warning: Could not find division for link_id {target_lid}. Using first Cr_ref value.")
-                cr_ref_for_station = cr_ref_vec[0]
+            cr_ref_for_station = cr_ref_vec[division_id] if division_id is not None else cr_ref_vec[0]
+            if division_id is None:
+                tqdm.write(f"  - Warning: Could not find division for link_id {target_lid}. Using first Cr_ref value.")
 
         frame_imgs = []
         for iter_idx in iter_range:
@@ -236,9 +235,9 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, plo
         if frame_imgs:
             gif_filepath = os.path.join(hydrograph_anim_dir, f"gauge_{station_label}_hydrograph_animation.gif")
             frame_imgs[0].save(gif_filepath, save_all=True, append_images=frame_imgs[1:], duration=1000, loop=0)
-            print(f"Animation saved to {gif_filepath}")
+            tqdm.write(f"  - Animation saved for Gauge {station_label}")
         else:
-             print(f"No frames generated for Gauge {station_label}, GIF not created.")
+             tqdm.write(f"  - No frames generated for Gauge {station_label}, GIF not created.")
 
 # ===================== Parameter Evolution Plot Function =====================
 def plot_parameter_evolution(param_array, active_param_indices, param_labels, param_ranges,
@@ -255,6 +254,9 @@ def plot_parameter_evolution(param_array, active_param_indices, param_labels, pa
     num_divisions = param_array.shape[2]
 
     for idx_active, orig_idx in enumerate(active_param_indices):
+        # Sanitize parameter label for use in filename
+        param_name_safe = re.sub(r'[^a-zA-Z0-9]', '', param_labels[orig_idx])
+
         for division_id in range(num_divisions):
             param_data_for_division = param_array[:, idx_active, division_id, :]
 
@@ -272,7 +274,7 @@ def plot_parameter_evolution(param_array, active_param_indices, param_labels, pa
             if cr_ref_for_plot is not None:
                 plt.axhline(cr_ref_for_plot, color='red', linestyle='--', label=f'Cr_ref = {cr_ref_for_plot:.2f}')
                 plt.legend()
-            out_path = os.path.join(param_ensemble_dir, f"parameter_{orig_idx}_division_{division_id}_ensemble.png")
+            out_path = os.path.join(param_ensemble_dir, f"parameter_{param_name_safe}_division_{division_id}_ensemble.png")
             plt.savefig(out_path)
             plt.close()
 
@@ -290,11 +292,73 @@ def plot_parameter_evolution(param_array, active_param_indices, param_labels, pa
             plt.xlabel('EKI Iterations')
             plt.ylim(*param_ranges[orig_idx])
             plt.legend()
-            out_path = os.path.join(param_mean_std_dir, f"parameter_{orig_idx}_division_{division_id}_mean_std.png")
+            out_path = os.path.join(param_mean_std_dir, f"parameter_{param_name_safe}_division_{division_id}_mean_std.png")
             plt.savefig(out_path)
             plt.close()
 
     print("Finished plotting parameter evolution for all divisions.")
+
+# ===================== Consolidated Parameter Evolution Plot Function =====================
+def plot_parameter_evolution_consolidated(param_array, active_param_indices, param_labels, param_ranges,
+                                          assimilation_phase, visual_output_dir, iter_range,
+                                          cr_ref_vec=None):
+    """
+    Plot consolidated parameter evolution graphs for all divisions in a single figure.
+    """
+    param_consolidated_dir = os.path.join(visual_output_dir, assimilation_phase, "parameter", "consolidated")
+    clear_and_create_dir(param_consolidated_dir)
+
+    num_divisions = param_array.shape[2]
+
+    for idx_active, orig_idx in enumerate(active_param_indices):
+        # Sanitize parameter label for use in filename
+        param_name_safe = re.sub(r'[^a-zA-Z0-9]', '', param_labels[orig_idx])
+
+        # Determine grid size for subplots
+        grid_size = int(np.ceil(np.sqrt(num_divisions)))
+        fig, axes = plt.subplots(grid_size, grid_size, 
+                                 figsize=(4 * grid_size, 3 * grid_size), 
+                                 sharex=True, sharey=True, squeeze=False)
+        axes = axes.flatten()
+
+        for division_id in range(num_divisions):
+            ax = axes[division_id]
+            param_data_for_division = param_array[:, idx_active, division_id, :]
+            
+            param_mean = np.mean(param_data_for_division, axis=1)
+            param_std = np.std(param_data_for_division, axis=1)
+
+            ax.plot(iter_range, param_mean, 'k-', lw=2, label='Mean')
+            ax.fill_between(iter_range, param_mean - param_std, param_mean + param_std,
+                            color='gray', alpha=0.3, label='Mean ± Std')
+
+            if cr_ref_vec is not None and division_id < len(cr_ref_vec):
+                cr_ref_for_plot = cr_ref_vec[division_id]
+                ax.axhline(cr_ref_for_plot, color='red', linestyle='--', label=f'Cr_ref = {cr_ref_for_plot:.2f}')
+
+            ax.set_title(f'Division {division_id}')
+            ax.grid(True, linestyle='--')
+
+        # Hide unused subplots
+        for i in range(num_divisions, len(axes)):
+            axes[i].set_visible(False)
+
+        # Add a single shared legend
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc='upper right')
+
+        fig.suptitle(f'Consolidated Mean Evolution - {param_labels[orig_idx]} ({assimilation_phase})', fontsize=16)
+        fig.supxlabel('EKI Iterations')
+        fig.supylabel(f"Value of {param_labels[orig_idx]}")
+        
+        # Set shared properties
+        plt.setp(axes, ylim=param_ranges[orig_idx])
+        fig.tight_layout(rect=[0, 0, 0.9, 0.95]) # Adjust layout for suptitle and legend
+
+        out_path = os.path.join(param_consolidated_dir, f"param_{param_name_safe}_all_divisions_consolidated.png")
+        plt.savefig(out_path, dpi=150)
+        plt.close(fig)
+    print("Finished plotting consolidated parameter evolution.")
 
 # ===================== Event Statistics Plot Function =====================
 def plot_event_statistics(assimilation_phase, visual_output_dir, out_dir, test_dict, 
@@ -305,107 +369,130 @@ def plot_event_statistics(assimilation_phase, visual_output_dir, out_dir, test_d
     if assimilation_phase != 'post':
         return
 
-    print("\n--- Generating Consolidated Event Statistics EVOLUTION Plots ---")
     event_stats_dir = os.path.join(visual_output_dir, assimilation_phase, "event_statistics")
     clear_and_create_dir(event_stats_dir)
 
-    # --- Steps 1-4: Load data and find events (same as before) ---
+    # --- Step 1: Load static data and configuration ---
+    print("\n--- Preparing for Event Statistics Evolution Analysis ---")
     observed_data = np.genfromtxt(os.path.join(out_dir, "csv", "meas_mean.csv"), delimiter=',', skip_header=1)
     num_steps = test_dict['steps']
-    iter_range = np.arange(0, num_steps)
+    iter_range = np.arange(0, num_steps + 1) # Iterate from 0 to num_steps
     event_params = test_dict.get('event_finding', {})
     min_dist = event_params.get('min_dist', 24)
     min_thresh_pct = event_params.get('min_thresh_pct', 25)
     min_length = event_params.get('min_length', 72)
+    metric_names = ['Peak', 'Mean', 'Std_Dev', 'Timing_Mean', 'Timing_Std_Dev']
 
-    # --- Loop through each station to generate ONE figure per station ---
+    # --- Step 2: Pre-process events and observed metrics for all stations ---
+    station_event_info = {}
     for i, station_idx in enumerate(plot_station_indices):
         station_name = plot_station_names[i]
-        target_lid = plot_link_ids[i]
-        
         obs_series = observed_data[:, station_idx]
         min_thresh_val = np.percentile(obs_series[obs_series > 0], min_thresh_pct) if np.any(obs_series > 0) else 0
         event_indices_list, _ = find_events(obs_series, min_dist, min_thresh_val, min_length)
         print(f"  - Found {len(event_indices_list)} events for station {station_name} using threshold {min_thresh_val:.2f}.")
 
         if not event_indices_list:
-            print(f"No events found for station {station_name}. Skipping.")
+            print(f"  - Warning: No events found for station {station_name}. It will be skipped.")
             continue
-            
-        print(f"Processing event evolution for Station: {station_name} (LID: {target_lid})")
 
-        # --- Calculate observed metrics (target lines) ---
         observed_metrics = {}
         for event_num, event_indices in enumerate(event_indices_list):
-            _, y_max, y_mean, _, _, _, y_std, y_mean_time, y_std_time = find_metric_values([event_indices], [obs_series[event_indices]])
+            if len(event_indices) < 3:
+                # Assign NaNs if event is too short for stable metrics
+                obs_vals = [np.nan] * 5
+            else:
+                _, y_max, y_mean, _, _, _, y_std, y_mean_time, y_std_time = find_metric_values([event_indices], [obs_series[event_indices]])
+                obs_vals = [y_max[0][0], y_mean[0][0], y_std[0][0], y_mean_time[0][0], y_std_time[0][0]]
+            
             observed_metrics[event_num] = {
-                'Peak': y_max[0][0], 'Mean': y_mean[0][0], 'Std_Dev': y_std[0][0],
-                'Timing_Mean': y_mean_time[0][0], 'Timing_Std_Dev': y_std_time[0][0]
+                'Peak': obs_vals[0], 'Mean': obs_vals[1], 'Std_Dev': obs_vals[2],
+                'Timing_Mean': obs_vals[3], 'Timing_Std_Dev': obs_vals[4]
             }
-
-        # --- Step 5: Gather simulated metrics evolution from all iterations (same as before) ---
-        metric_names = ['Peak', 'Mean', 'Std_Dev', 'Timing_Mean', 'Timing_Std_Dev']
-        evolution_data = {
-            metric: {event_num: [] for event_num in range(len(event_indices_list))} 
-            for metric in metric_names
+        
+        station_event_info[station_name] = {
+            'station_idx': station_idx,
+            'link_id': plot_link_ids[i],
+            'event_indices_list': event_indices_list,
+            'observed_metrics': observed_metrics
         }
 
-        for iter_idx in iter_range:
-            sim_particles_file = os.path.join(out_dir, "npy", f"{iter_idx}_post_particles.npy")
-            if not os.path.exists(sim_particles_file):
-                print(f"Warning: Particles file not found for iter {iter_idx}. Stopping.")
-                break
-            
-            simulated_particles = np.load(sim_particles_file)
+    # --- Step 3: Efficiently gather simulated metrics evolution ---
+    # Initialize a data structure to hold all evolution data, keyed by station name
+    evolution_data = {
+        s_name: {metric: {e_num: [] for e_num in range(len(s_info['event_indices_list']))} for metric in metric_names}
+        for s_name, s_info in station_event_info.items()
+    }
+
+    print("\n--- Gathering simulated metrics across all iterations and stations (optimized) ---")
+    for iter_idx in tqdm(iter_range, desc="Processing EKI Iterations"):
+        # Load particle file ONCE per iteration
+        file_path = os.path.join(out_dir, 'npy', f'{iter_idx-1}_post_particles.npy') if iter_idx > 0 else os.path.join(out_dir, 'npy', '0_prior_particles.npy')
+        if not os.path.exists(file_path):
+            print(f"Warning: Particles file not found for iter {iter_idx}, path: {file_path}. Stopping.")
+            break
+        
+        simulated_particles = np.load(file_path)
+
+        # Distribute calculations to each station
+        for station_name, s_info in station_event_info.items():
+            station_idx = s_info['station_idx']
             station_particles = simulated_particles[:, :, station_idx]
             
-            for event_num, event_indices in enumerate(event_indices_list):
+            for event_num, event_indices in enumerate(s_info['event_indices_list']):
                 event_ensemble_data = station_particles[:, event_indices]
-                evolution_data['Peak'][event_num].append(np.max(event_ensemble_data, axis=1))
-                evolution_data['Mean'][event_num].append(np.mean(event_ensemble_data, axis=1))
-                evolution_data['Std_Dev'][event_num].append(np.std(event_ensemble_data, axis=1))
-                
                 ens_size = station_particles.shape[0]
                 timing_mean_ensemble, timing_std_ensemble = (np.zeros(ens_size), np.zeros(ens_size))
+
                 for particle_idx in range(ens_size):
                     vals = event_ensemble_data[particle_idx, :]
-                    if np.sum(vals) > 0:
+                    if np.any(vals) and np.sum(vals) > 0:
                         mean_t = np.sum(event_indices * vals) / np.sum(vals)
                         var_t = np.sum(vals * (event_indices - mean_t)**2) / np.sum(vals)
                         timing_mean_ensemble[particle_idx] = mean_t
                         timing_std_ensemble[particle_idx] = np.sqrt(var_t)
                     else:
-                        timing_mean_ensemble[particle_idx], timing_std_ensemble[particle_idx] = (np.nan, np.nan)
+                        timing_mean_ensemble[particle_idx] = np.nan
+                        timing_std_ensemble[particle_idx] = np.nan
                 
-                evolution_data['Timing_Mean'][event_num].append(timing_mean_ensemble)
-                evolution_data['Timing_Std_Dev'][event_num].append(timing_std_ensemble)
+                # Append this iteration's ensemble metrics to the main data structure
+                data_to_append = {
+                    'Peak': np.max(event_ensemble_data, axis=1),
+                    'Mean': np.mean(event_ensemble_data, axis=1),
+                    'Std_Dev': np.std(event_ensemble_data, axis=1),
+                    'Timing_Mean': timing_mean_ensemble,
+                    'Timing_Std_Dev': timing_std_ensemble
+                }
+                for metric_name in metric_names:
+                    evolution_data[station_name][metric_name][event_num].append(data_to_append[metric_name])
 
-        # --- Step 6: Create ONE figure with 5 subplots for the station ---
+    # --- Step 4: Generate one plot per station using the pre-computed data ---
+    print("\n--- Generating evolution plots for each station ---")
+    for station_name, s_info in station_event_info.items():
+        target_lid = s_info['link_id']
+        num_events = len(s_info['event_indices_list'])
+        observed_metrics = s_info['observed_metrics']
+
         fig, axes = plt.subplots(len(metric_names), 1, figsize=(12, 18), sharex=True)
         fig.suptitle(f'Event Metrics Evolution for Station {station_name} (LID: {target_lid})', fontsize=16)
-        
-        colors = plt.cm.viridis(np.linspace(0, 1, len(event_indices_list)))
+        colors = plt.cm.viridis(np.linspace(0, 1, num_events)) if num_events > 1 else ['blue']
 
+        # For each metric, create a subplot
         for i, metric_name in enumerate(metric_names):
             ax = axes[i]
-            for event_num in range(len(event_indices_list)):
-                # Stack the list of ensemble arrays into a single 2D array
-                metric_evolution_array = np.vstack(evolution_data[metric_name][event_num])
-                
+            # For each event, plot its evolution line
+            for event_num in range(num_events):
+                metric_evolution_array = np.vstack(evolution_data[station_name][metric_name][event_num])
                 mean_evolution = np.nanmean(metric_evolution_array, axis=1)
                 std_evolution = np.nanstd(metric_evolution_array, axis=1)
                 
-                # Plot mean evolution for this event
                 ax.plot(iter_range, mean_evolution, color=colors[event_num], label=f'Event {event_num+1} Sim Mean')
-                # Plot uncertainty band for this event
-                ax.fill_between(iter_range, mean_evolution - std_evolution, mean_evolution + std_evolution,
-                                color=colors[event_num], alpha=0.15)
+                ax.fill_between(iter_range, mean_evolution - std_evolution, mean_evolution + std_evolution, color=colors[event_num], alpha=0.15)
                 
-                # Plot the observed target value for this event
                 target_value = observed_metrics[event_num][metric_name]
-                ax.axhline(target_value, color=colors[event_num], linestyle='--', 
-                           label=f'Event {event_num+1} Obs ({target_value:.2f})')
-
+                if pd.notna(target_value):
+                    ax.axhline(target_value, color=colors[event_num], linestyle='--', label=f'Event {event_num+1} Obs ({target_value:.2f})')
+            
             y_label = 'Discharge (m$^3$/s)' if 'Timing' not in metric_name else 'Time (hours)'
             ax.set_ylabel(y_label)
             ax.set_title(f'Evolution of {metric_name.replace("_", " ")}')
@@ -413,7 +500,7 @@ def plot_event_statistics(assimilation_phase, visual_output_dir, out_dir, test_d
             ax.grid(True)
 
         axes[-1].set_xlabel('EKI Iteration')
-        fig.tight_layout(rect=[0, 0, 0.85, 0.96]) # Adjust layout to make space for suptitle and legend
+        fig.tight_layout(rect=[0, 0, 0.85, 0.96])
         
         output_path = os.path.join(event_stats_dir, f"station_{station_name}_all_metrics_evolution.png")
         plt.savefig(output_path)
@@ -563,6 +650,7 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, p
             conv_data = convergence_metrics.get(division_id, {})
             if pd.notna(cr_mean) and point:
                 annotation_text_lines = []
+                annotation_text_lines.append(f"Division: {division_id}") # ADDED: Division ID
                 if is_simulated:
                     cr_ref = row.get('Cr_ref')
                     cr_std = row.get('Cr_std')
@@ -688,6 +776,10 @@ def generate_hydrograph_metric_map(assimilation_phase, visual_output_dir, out_di
 
         if event_indices_list:
             for event_indices in event_indices_list:
+                # Skip events that are too short for stable polyfit, avoiding RankWarning
+                if len(event_indices) < 3:
+                    continue
+
                 obs_event_data = obs_series[event_indices]
                 sim_event_data = sim_median_series[event_indices]
 
@@ -932,7 +1024,7 @@ def generate_rainfall_map(visual_output_dir, test_dict, model_link_ids, link_to_
         if pd.notna(rain_rate) and point:
             num_links = links_per_division.get(division_id, 1) # Default to 1 to avoid errors
             rate_density = rain_rate / num_links if num_links > 0 else 0
-            annotation_text = f"Total Rate: {rain_rate:.1f}\nDensity (by link): {rate_density:.2f}"
+            annotation_text = f"Division: {division_id}\nAvg. Rate: {rain_rate:.2f} mm/hr\nDensity: {rate_density:.3f}"
             ax.text(point.x, point.y, annotation_text, fontsize=6, ha='center', va='center',
                     bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7, ec='none'))
 
@@ -1023,6 +1115,9 @@ def main_visualization(test_dict):
     plot_parameter_evolution(post_param_array, active_param_indices, param_labels, param_ranges,
                              'post', visual_output_dir, iter_range_post, 
                              cr_ref_vec=cr_ref_vec)
+    plot_parameter_evolution_consolidated(post_param_array, active_param_indices, param_labels, param_ranges,
+                             'post', visual_output_dir, iter_range_post,
+                             cr_ref_vec=cr_ref_vec)
     plot_event_statistics('post', visual_output_dir, test_dict['out_dir'], test_dict,
                           plot_station_indices, plot_station_names, plot_link_ids)
 
@@ -1043,6 +1138,9 @@ def main_visualization(test_dict):
                                   'prior', visual_output_dir, test_dict['out_dir'])
     plot_parameter_evolution(prior_param_array, active_param_indices, param_labels, param_ranges,
                              'prior', visual_output_dir, iter_range_prior, 
+                             cr_ref_vec=cr_ref_vec)
+    plot_parameter_evolution_consolidated(prior_param_array, active_param_indices, param_labels, param_ranges,
+                             'prior', visual_output_dir, iter_range_prior,
                              cr_ref_vec=cr_ref_vec)
     plot_event_statistics('prior', visual_output_dir, test_dict['out_dir'], test_dict,
                           plot_station_indices, plot_station_names, plot_link_ids)

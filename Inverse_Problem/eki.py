@@ -70,9 +70,10 @@ def pert(X, test_dict, sparse_parent):
             loc = loc + parent_num
     return X
 
-def EnKF(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray) -> np.ndarray:
+def _EnKF_standard(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray) -> np.ndarray:
     """
-    Perform the Standard Perturbed Observation Ensemble Kalman Filter (EnKF) update step.
+    Perform the Standard Perturbed Observation Ensemble Kalman Filter (EnKF) update step
+    using direct inversion. This method is efficient for low-dimensional observations.
 
     Args:
         X_pre (np.ndarray): Prior ensemble of latent parameters.
@@ -85,7 +86,6 @@ def EnKF(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray
     """
     ens = X_pre.shape[1]
     y_num = len(y)
-    y_size = y.shape
     
     #Computes state and measurement means
     xbar = np.mean(X_pre, axis=1, keepdims=True)
@@ -99,11 +99,91 @@ def EnKF(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray
     #Computes Kalman Gain 
     X = (X_pre - xbar) / np.sqrt(ens - 1)
     Y = (Y_pre - ybar) / np.sqrt(ens - 1)
+    # This is the expensive step for high-dimensional y: (Y @ Y.T) is (y_dim, y_dim)
     K = np.linalg.solve((Y @ Y.T + R).T, (X @ Y.T).T).T
     
     #Updates states (parameter vector)
     X_post = X_pre + K @ (y_pert - Y_pre)
     return X_post
+
+def _EnKF_svd(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray) -> np.ndarray:
+    """
+    Perform the EnKF update step using an SVD-based method to avoid direct inversion
+    of the large observation covariance matrix. This is efficient for high-dimensional
+    observations where y_dim >> ensemble_size.
+
+    Args:
+        X_pre (np.ndarray): Prior ensemble of latent parameters. (n_params, n_ens)
+        Y_pre (np.ndarray): Prior ensemble of model outputs. (n_obs, n_ens)
+        y (np.ndarray): Actual observations. (n_obs, 1)
+        R_diag (np.ndarray): Diagonal of obs noise covariance. (n_obs,)
+
+    Returns:
+        np.ndarray: Posterior ensemble of latent parameters. (n_params, n_ens)
+    """
+    n_ens = X_pre.shape[1]
+    n_y = Y_pre.shape[0]
+
+    # Compute ensemble means and deviations
+    x_mean = np.mean(X_pre, axis=1, keepdims=True)
+    y_mean = np.mean(Y_pre, axis=1, keepdims=True)
+    X_prime = X_pre - x_mean
+    Y_prime = Y_pre - y_mean
+
+    # Perturb observations for each ensemble member
+    R = np.diag(R_diag)
+    pert_vec = np.random.normal(0, 1, (n_y, n_ens))
+    y_pert = y + np.sqrt(R) @ pert_vec
+    
+    # Innovation (difference between perturbed obs and predictions)
+    d = y_pert - Y_pre
+
+    # Use SVD to solve the update equation efficiently
+    # This avoids forming the (n_y, n_y) matrix Y*Y' + R
+    R_inv = np.diag(1.0 / R_diag)
+    
+    # The core of the SVD method is to operate in the ensemble space (n_ens, n_ens)
+    # This matrix is much smaller than the observation space matrix
+    M = Y_prime.T @ R_inv @ Y_prime + (n_ens - 1) * np.eye(n_ens)
+    
+    # Solve for the update in ensemble space
+    # (Y' R_inv d) has shape (n_ens, n_ens)
+    update_ens_space = np.linalg.solve(M, (Y_prime.T @ R_inv @ d))
+
+    # Project the update back to the parameter space
+    update = X_prime @ update_ens_space
+    
+    X_post = X_pre + update
+    return X_post
+
+def EnKF(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray) -> np.ndarray:
+    """
+    Dispatcher for the Ensemble Kalman Filter (EnKF) update step.
+
+    This function checks the dimensions of the observation space (n_y) versus the
+    ensemble size (n_en) and dynamically chooses the most efficient algorithm.
+    - For n_y > n_en, it uses an SVD-based method (_EnKF_svd) to avoid inverting a large matrix.
+    - Otherwise, it uses the standard direct inversion method (_EnKF_standard).
+
+    Args:
+        X_pre (np.ndarray): Prior ensemble of latent parameters.
+        Y_pre (np.ndarray): Prior ensemble of model outputs (observations).
+        y (np.ndarray): Actual observations (measurement).
+        R_diag (np.ndarray): Diagonal elements of the measurement noise covariance matrix (R).
+
+    Returns:
+        np.ndarray: Posterior ensemble of latent parameters after the EnKF update.
+    """
+    n_y = Y_pre.shape[0]
+    n_en = X_pre.shape[1]
+
+    # Check if the observation dimension is significantly larger than the ensemble size
+    if n_y > n_en:
+        print(f"High-dimensional observation detected (y_dim={n_y}, ens_size={n_en}). Using SVD-based EnKF for efficiency.")
+        return _EnKF_svd(X_pre, Y_pre, y, R_diag)
+    else:
+        print(f"Standard-dimensional observation (y_dim={n_y}, ens_size={n_en}). Using direct inversion EnKF.")
+        return _EnKF_standard(X_pre, Y_pre, y, R_diag)
 
 def find_events(y: np.ndarray, min_dist: int, min_thresh: float, min_length: int) -> Tuple[List[List[int]], List[List[float]]]:
     """
@@ -214,8 +294,18 @@ def find_metric_values(event_list, event_val_list):
     for events, values in zip(event_list, event_val_list):
         max_val_idx = np.argmax(values)
         x = np.array([e for i,e in enumerate(events) if e >= events[max_val_idx]])
-        y = np.log(np.array([v for i,v in enumerate(values) if events[i] >= events[max_val_idx]]))
-        slope, inter = np.polyfit(x, y, 1)
+        # y = np.log(np.array([v for i,v in enumerate(values) if events[i] >= events[max_val_idx]]))
+        # slope, inter = np.polyfit(x, y, 1)
+        # Consistently filter for recession limb points with positive values to avoid mismatched array lengths
+        recession_mask = (np.array(events) >= events[max_val_idx]) & (np.array(values) > 0)
+        x = np.array(events)[recession_mask]
+        y_vals = np.array(values)[recession_mask]
+
+        if len(x) < 2: # Check if enough points exist for a linear fit
+            slope, inter = np.nan, np.nan
+        else:
+            y = np.log(y_vals)
+            slope, inter = np.polyfit(x, y, 1)
         max_val_idx = np.argmax(values)
         max_value = values[max_val_idx]
         mean_value = np.mean(values)
