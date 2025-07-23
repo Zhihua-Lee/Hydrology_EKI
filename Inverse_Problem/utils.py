@@ -4,7 +4,10 @@ from typing import List, Tuple, Dict, Union
 import numpy as np
 import os
 import yaml
+import pandas as pd
 from jinja2 import Environment, FileSystemLoader
+from eki import subsample_data
+
 ## Utility functions
 
 def process_yaml(yamlname: str, context: dict = None) -> dict:
@@ -171,3 +174,62 @@ def get_subwatershed(test_dict, id_list_use):
 
     # Return both the matrix and the final mapping
     return sparse_parent, link_to_division_map_final
+
+def load_and_process_observations(test_dict: Dict, file_order: np.ndarray, usgs_to_link_id: Dict, sorted_link_ids: List[int]) -> Tuple:
+    """
+    Loads and processes the observation data (either real or simulated).
+    This function handles file reading, data cleaning, time filtering, and column selection.
+
+    Args:
+        test_dict (Dict): The main configuration dictionary for the experiment.
+        file_order (np.ndarray): An array defining the column order in the observation data files.
+        usgs_to_link_id (Dict): A mapping from USGS gauge IDs to internal model link IDs.
+        sorted_link_ids (List[int]): A sorted list of all link IDs used in the model.
+
+    Returns:
+        Tuple: A tuple containing:
+            - data_use (np.ndarray): The processed observation data for the specific gauge.
+            - data_plot (np.ndarray): Subsampled data for plotting.
+            - sav_ids (np.ndarray): The sensor IDs corresponding to the subsampled data.
+            - col_idx_in_sav (np.ndarray): The column index in the .sav file for the observation gauge.
+    """
+    print("\n--- Loading and Processing Observation Data ---")
+    data_file = test_dict['meas_series']
+    usgs_gauge_id = test_dict['meas_usgs']
+    using_simulated_data = test_dict['using_simulated_data']
+
+    if using_simulated_data:
+        print("Processing SIMULATED observation data...")
+        df = pd.read_csv(data_file, header=None, dtype=str, na_values=[''], encoding='utf-8').fillna("0")
+        if df.iloc[-1].str.strip().eq("").all() or df.iloc[-1].eq("0").all():
+            df = df.iloc[:-1, :]
+        if df.iloc[:, -1].str.strip().eq("").all() or df.iloc[:, -1].eq("0").all():
+            df = df.iloc[:, :-1]
+        data_tmp = df.astype(float).to_numpy()
+    else:
+        print("Processing REAL observation data...")
+        df = pd.read_csv(data_file, index_col=0, dtype=str, na_values=[''], encoding='utf-8').fillna("0")
+        df.index = df.index.str.replace(r'-\d\d:\d\d', '', regex=True)
+        df.index = pd.to_datetime(df.index, errors='coerce')
+        if df.index.isna().any():
+            print("Warning: Some indices could not be parsed to datetime!")
+            df = df[~df.index.isna()]
+        
+        start_time = pd.to_datetime(test_dict['time_start'])
+        end_time = pd.to_datetime(test_dict['time_end'])
+        print(f"Filtering data between {start_time} and {end_time}.")
+        df_filtered = df.loc[start_time:end_time]
+        data_tmp = df_filtered.astype(float).to_numpy()
+        
+    print("Processed data shape:", data_tmp.shape)
+    
+    col_idx_gid = np.where(file_order == usgs_to_link_id[usgs_gauge_id])[0]
+    print(f"Column index for observation gauge {usgs_gauge_id} in data file: {col_idx_gid}")
+    data_use = data_tmp[:, col_idx_gid]
+    
+    data_plot, sav_ids = subsample_data(data_tmp, test_dict, sorted_link_ids, file_order)
+    
+    col_idx_in_sav = np.where(sav_ids == usgs_to_link_id[usgs_gauge_id])[0]
+    print(f"Column index for observation gauge in .sav file: {col_idx_in_sav}")
+    
+    return data_use, data_plot, sav_ids, col_idx_in_sav

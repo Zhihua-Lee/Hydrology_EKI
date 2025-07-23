@@ -5,11 +5,11 @@ import numpy as np
 import os, time
 
 from tqdm import tqdm
-from utils import process_yaml, get_ids, get_subwatershed
+from utils import process_yaml, get_ids, get_subwatershed, load_and_process_observations
 from io_ifc import create_meas_sav, create_test_initial_condition, create_prm, create_gbl, create_batch_job_file, save_statistics_csv, save_particles, update_prm_by_division #update_prm_add_or_overwrite_cr
 from eki import subsample_data, pert, EnKF_step
 from latent import create_latent, transform_latent
-from run import run_test
+from run import run_test, generate_synthetic_data
 from ifc_usgs_fileorder import load_usgs_mapping
 
 import pandas as pd
@@ -17,215 +17,129 @@ import pandas as pd
 import visualize
 
 def main(yaml_name):
-    # Read yaml file and get directories and number of steps
+    # --- 1. Configuration and Setup ---
+    # Load experiment settings from the specified YAML file.
     test_dict = process_yaml(yaml_name)
     tmp_dir = test_dict['tmp_dir']
     out_dir = test_dict['out_dir']
     step_num = test_dict['steps']
     ens = test_dict['num_ensembles']
 
-    # # Presimulate data if using_simulated_data
-    # using_simulated_data = test_dict['using_simulated_data']
-    # print("using_simulated_data: ",using_simulated_data)
-    # print("data from: ",test_dict['meas_series'])
+    # --- 2. Environment and File Setup ---
+    print("\n--- Setting up experiment environment ---")
+    # Clean the temporary directory and set up the output directory structure.
+    print(f"Cleaning temporary directory: {tmp_dir}")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    os.makedirs(tmp_dir)
+    os.makedirs(out_dir, exist_ok=True)
     
-    # if using_simulated_data:
-        
-    #     # simulate hydrograph data
-    #     # --- NEW LOGIC FOR PRE-SIMULATION SETUP ---
-    #     print("Preparing to generate simulated data with division-based Cr values.")
-        
-    #     # 1. Get IDs and the division mapping ONCE from the clean template
-    #     prm_link_ids = get_ids(test_dict)
-    #     sparse_parent, link_to_division_map = get_subwatershed(test_dict, prm_link_ids)
-    #     num_divisions = sparse_parent.shape[0]
-    
-    #     # 2. Get Cr_ref from config and ensure it's a vector of the correct size
-    #     cr_ref_config = test_dict.get('Cr_ref')
-    #     if cr_ref_config is None:
-    #         raise ValueError("Cr_ref must be defined in config for simulated data experiments.")
-        
-    #     if isinstance(cr_ref_config, (int, float)):
-    #         cr_ref_vec = np.full(num_divisions, float(cr_ref_config))
-    #     elif isinstance(cr_ref_config, list):
-    #         if len(cr_ref_config) == num_divisions:
-    #             cr_ref_vec = np.array(cr_ref_config)
-    #         else:
-    #             raise ValueError(f"Size of Cr_ref list ({len(cr_ref_config)}) does not match number of divisions ({num_divisions}).")
-    #     else:
-    #         raise TypeError("Cr_ref must be a number or a list.")
-        
-    #     # 3. Call the new robust function, passing the map to it
-    #     update_prm_by_division(test_dict['prm'], link_to_division_map, cr_ref_vec)
-        
-    #     output_csv = test_dict['meas_series']
-    #     sim_dir = os.path.join(os.path.dirname(test_dict['meas_series']), '')
-    #     # delete old Cr_sim_data.csv if it exists
-    #     if os.path.isfile(output_csv):
-    #         print(f"Removing old {output_csv}")
-    #         os.remove(output_csv)
-    #     # Submit the presim job using the 'presimulate_Cr.sh' script.
-    #     job_cmd = f"qsub {sim_dir}presimulate_Cr.sh"
-    #     print(job_cmd)
-    #     procs = os.system(job_cmd)
-    #     start_time = time.time()
-    #     # Wait for Cr_sim_data.csv to be generated as our simulated observation
-    #     while True:
-    #         try:
-    #             elapsed = int(time.time() - start_time)
-    #             if os.path.isfile(output_csv):
-    #                 with open(output_csv, 'r') as f:
-    #                     data = f.read()
-    #                 if data.strip() != "":
-    #                     # Clean the first two rows
-    #                     with open(output_csv, 'r') as f:
-    #                         lines = f.readlines()
-    #                     if len(lines) > 2:
-    #                         lines_trimmed = lines[2:]
-    #                         with open(output_csv, 'w') as f:
-    #                             f.writelines(lines_trimmed)
-    #                         print(f"\nRemoved header lines from {output_csv}")
-    #                     print(f"\n✅ File {output_csv} detected and non-empty after {elapsed} seconds. Proceeding...")
-    #                     break
-    #                 else:
-    #                     sys.stdout.write(f"\r⏳ {elapsed}s elapsed: File exists but is empty. Waiting...")
-    #                     sys.stdout.flush()
-    #             else:
-    #                 sys.stdout.write(f"\r⏳ {elapsed}s elapsed: Waiting for {output_csv} to appear...")
-    #                 sys.stdout.flush()
-    #         except Exception as e:
-    #             sys.stdout.write(f"\r❌ Error checking file: {e}. Retrying in 10s...     ")
-    #             sys.stdout.flush()
-    #         time.sleep(10)
-    
-    # # Get data file directory, idx of locations, and standard deviation parameters
-    # data_file = test_dict['meas_series']
-    # usgs_gauge_id = test_dict['meas_usgs'] # usgs gauge id for observation
-    # abs_meas_std = test_dict['abs_std_meas']
-    # rel_meas_std = test_dict['rel_std_meas']
-    # # loading USGS mapping
-    # # file_order: # List of link IDs in the exact order they appear as columns in the series files; used to align USGS gauge data with model output
-    # usgs_to_link_id, link_to_usgs_id, file_order = load_usgs_mapping(test_dict)
-    
-    # # Remove all temp files and copy yaml(initial, forcing, meas_csv) into out dir and tries to make output for csv and pickle outputs
-    # # for f in os.listdir(tmp_dir):
-    # #     os.remove(os.path.join(tmp_dir,f))
-    # for root, dirs, files in os.walk(tmp_dir, topdown=False):
-    #     for name in files:
-    #         os.remove(os.path.join(root, name))
-    #     for name in dirs:
-    #         shutil.rmtree(os.path.join(root, name))
-    # if not os.path.exists(out_dir):
-    #     os.makedirs(out_dir, exist_ok=True)
-    # shutil.copyfile(yaml_name, os.path.join(out_dir, 'test_config.j2'))
-    # shutil.copy(test_dict['initial_uini'], out_dir) # keep the filename
-    # shutil.copy(test_dict['meas_series'], out_dir) # keep the filename
-    # os.makedirs(out_dir + 'csv/', exist_ok=True)
-    # os.makedirs(out_dir + 'npy/', exist_ok=True)
-    
-    # # Get list of link IDs from .prm(example) and create all necesary files
-    # model_link_ids = get_ids(test_dict)  # from .prm file
-    # if test_dict['watershed_csv'] is None: # if we have no watershed information, consider just using a global parameter
-    #     sparse_parent = np.ones((1, 1))
-    # else:
-    #     # Update the call to unpack the two return values
-    #     sparse_parent, _ = get_subwatershed(test_dict, model_link_ids) # We only need the matrix here
-    
-    # # initializing latent ensembles: standard normal distribution
-    # latent_var = create_latent(test_dict, sparse_parent, ens)
-    # # For parameters with `dist=True`, the original values in the template `.prm` are ignored and the values are generated entirely by mapping the latent variables into the specified bounds; 
-    # # for parameters with `dist=False`, the original values from the template `.prm` are used unchanged.
-    # prm_ens, sorted_link_ids = transform_latent(test_dict, sparse_parent, latent_var)
+    # Copy essential configuration and data files for reproducibility.
+    print(f"Copying essential files to output directory: {out_dir}")
+    shutil.copyfile(yaml_name, os.path.join(out_dir, 'test_config.j2'))
+    shutil.copy(test_dict['initial_uini'], out_dir)
+    shutil.copy(test_dict['meas_series'], out_dir)
+    os.makedirs(os.path.join(out_dir, 'csv/'), exist_ok=True)
+    os.makedirs(os.path.join(out_dir, 'npy/'), exist_ok=True)
 
-    # # Create(filtering based on lid) all necessary files for running tests
-    # create_meas_sav(test_dict, sorted_link_ids) #in the order of gauges
-    # create_test_initial_condition(test_dict, sorted_link_ids) # modified
-    # create_prm(test_dict, sorted_link_ids, prm_ens, ens)
-    # create_gbl(test_dict, ens)
-    # create_batch_job_file(test_dict, tmp_dir) # just need to create the submit.sh once and then modify parameters each iteration
+    # --- 3. Model Structure Initialization and Static File Generation ---
+    print("\n--- Initializing Model Structure and Static Files ---")
+    # This stage identifies the model's physical structure (link IDs, watersheds)
+    # and creates all necessary static input files for the simulation runs.
 
-    # # filter out observation data based on observation gauge id, and specified timespan
-    # # Get data from csv file and seperate it into EKI / Plotting / IDs and save to file
-    # # data = np.genfromtxt(data_file, delimiter=',', skip_header=True, dtype=str, encoding='utf-8', filling_values='nan')
-    # # time_idx = np.array([np.datetime64(t.strip()) for t in data[:, 0]])
-    # # start_time = np.datetime64(test_dict['time_start'])
-    # # end_time   = np.datetime64(test_dict['time_end'])
-    # # filtered_data = data[(time_idx >= start_time) & (time_idx <= end_time)]
-    # # data_tmp = filtered_data[:, 1:].astype(float)
-    # if using_simulated_data:
-    #     # 使用模拟数据时，CSV 文件没有表头和索引行
-    #     df = pd.read_csv(data_file, header=None, dtype=str, na_values=[''], encoding='utf-8').fillna("0")
-    #     # 检查最后一行是否全为空或者全为 "0"，如果是，则删除最后一行
-    #     if df.iloc[-1].str.strip().eq("").all() or df.iloc[-1].eq("0").all():
-    #         df = df.iloc[:-1, :]
-    #     # 如果最后一列全为空或全为 "0"，删除最后一列
-    #     if df.iloc[:, -1].str.strip().eq("").all() or df.iloc[:, -1].eq("0").all():
-    #         df = df.iloc[:, :-1]    
-    #     # 转换为浮点型矩阵
-    #     data_tmp = df.astype(float).to_numpy()
-    # else:
-    #     # 1. 读取 CSV，不让 pandas 自动解析日期
-    #     df = pd.read_csv(data_file, index_col=0, dtype=str, na_values=[''], encoding='utf-8').fillna("0")
-    #     # 2. 去掉索引字符串中的时区偏移，例如 '-06:00'
-    #     #    假设所有行都含这个偏移，如果也有别的时区或不一致情况，需要更灵活地处理
-    #     df.index = df.index.str.replace(r'-\d\d:\d\d$', '', regex=True)
-    #     # 3. 将索引字符串解析为 datetime
-    #     df.index = pd.to_datetime(df.index, errors='coerce')
-    #     print("Index dtype after manual parse:", df.index.dtype)
-    #     # 确保这里你看到的是 datetime64[ns]
-    #     # 4. 若仍有无法转换的值，df.index 里会出现 NaT，你可以检查或丢弃 NaT
-    #     if df.index.isna().any():
-    #         print("Warning: Some indices could not be parsed to datetime!")
-    #         df = df[~df.index.isna()]
-    #     # 5. 现在索引已经是 tz-naive 的 datetime64[ns]，无需再 .tz_localize(None)
-    #     #    直接进行时间范围过滤
-    #     start_time = pd.to_datetime(test_dict['time_start'])
-    #     end_time   = pd.to_datetime(test_dict['time_end'])
-    #     df_filtered = df.loc[start_time:end_time]
-    #     # 6. 提取数值部分并转换为 float
-    #     data_tmp = df_filtered.astype(float).to_numpy()
-    # print("data shape:", data_tmp.shape)
-    # #col location in data file where the used gid is
-    # col_idx_gid = np.where(file_order == usgs_to_link_id[usgs_gauge_id])[0]
-    # print("col_idx_gid:", col_idx_gid)
-    # data_use = data_tmp[:,col_idx_gid]
-    # data_plot, sav_ids = subsample_data(data_tmp, test_dict, sorted_link_ids, file_order)
-    # #TDOD: Change this so usgs_gauge_id can be a list of strings, to enable multiple sensors turned on simultaneously
-    # #col location in .sav where the used lid is
-    # col_idx_in_sav = np.where(sav_ids == usgs_to_link_id[usgs_gauge_id])[0]
-    # print("col_idx_in_sav",col_idx_in_sav)
-    # save_statistics_csv(test_dict, sparse_parent, Y_mean=data_plot, Y_std=None, X_mat=None, name='csv/' + "meas")
+    # A. Identify model structure (link IDs and watershed divisions).
+    usgs_to_link_id, link_to_usgs_id, output_file_link_id_order = load_usgs_mapping(test_dict)
+    sorted_link_ids = get_ids(test_dict) # The authoritative source for sorted link IDs.
+    
+    if test_dict['watershed_csv'] is None:
+        print("No watershed division file provided. Assuming a single global parameter set.")
+        # The map should represent one division containing all links.
+        # Its shape must be (num_divisions, num_links), which is (1, num_links).
+        num_links = len(sorted_link_ids)
+        division_to_link_map = np.ones((1, num_links))
+    else:
+        print(f"Loading watershed divisions from: {test_dict['watershed_csv']}")
+        # Pass sorted_link_ids to ensure consistency.
+        division_to_link_map, _ = get_subwatershed(test_dict, sorted_link_ids) 
+    # ANNOTATION: The 'division_to_link_map' matrix is a transformation operator that maps parameters
+    # defined at the watershed division level to the individual link level.
+    # - Shape: (number_of_divisions, number_of_links)
+    # - Value: A '1' at matrix[i, j] signifies that link 'j' belongs to division 'i'.
+    # - Usage: It's used via its transpose to broadcast coarse-grained division parameters
+    #          to all their fine-grained child links.
+    
+    # B. Create all static model files immediately.
+    print("Creating static model input files (.sav, .uini, .gbl, submit script)...")
+    create_meas_sav(test_dict, sorted_link_ids)       # Sensor location file.
+    create_test_initial_condition(test_dict, sorted_link_ids) # Initial conditions file.
+    create_gbl(test_dict, ens)                        # Global configuration files.
+    create_batch_job_file(test_dict, tmp_dir)         # Job submission script.
 
-    # # EKI parameters (y = data, X = latent parameter ensemble, R = measurement uncertainty)
-    # y = np.reshape(data_use,(-1,1)) # reshape into (N, 1)
-    # R = (rel_meas_std * y.reshape(-1))**2 + abs_meas_std**2
-    # X_post = latent_var
+    # --- 4. EKI Core Variable Preparation ---
+    print("\n--- Preparing EKI Core Variables (X, y, R) ---")
+    # This stage prepares all dynamic variables required to start the EKI main loop.
 
-    # # Run EKI steps
-    # print("\n" + "="*60 + "\n" + "🚀  STARTING EKI PROCESS" +"\n"+ "="*60 + "\n")
-    # for i in tqdm(range(step_num)):
-    #     # Perturb previous parameters, run model, get simulation results - Prior
-    #     X_prior = pert(X_post, test_dict, sparse_parent) # perturb in latent space  
-    #     prm_ens_prior, _ = transform_latent(test_dict, sparse_parent, X_prior)
-    #     create_prm(test_dict, sorted_link_ids, prm_ens_prior, ens) 
-    #     Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)    
-    #     save_particles(test_dict, sparse_parent, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
-    #     save_statistics_csv(test_dict, sparse_parent, Y_plot_mean, Y_plot_std, X_prior, name='csv/' + str(i) + "_prior")
+    # A. Prepare State Vector (X).
+    print("Initializing state vector X_post...")
+    X_post = create_latent(test_dict, division_to_link_map, ens) # Initialize the posterior as the initial latent variables.
+
+    # B. Prepare Observation Vector (y) and Error Covariance Diagonal (R).
+    print("Preparing observation vector y and error covariance diagonal R...")
+    # Handle observation data source.
+    using_simulated_data = test_dict['using_simulated_data']
+    print(f"\n--- Data Source Configuration ---")
+    print(f"Using simulated data: {using_simulated_data}")
+    print(f"Measurement data path: {test_dict['meas_series']}")
+    if using_simulated_data:
+        generate_synthetic_data(test_dict)
+    else:
+        print("Using real observation data. Skipping pre-simulation step.")
+    
+    # Load and process observation data now that .sav file exists.
+    print("Loading and processing observation data...")
+    assimilation_data, plotting_data, _, col_idx_in_sav = load_and_process_observations(
+        test_dict, output_file_link_id_order, usgs_to_link_id, sorted_link_ids
+    )
+    print("Saving initial measurement statistics...")
+    save_statistics_csv(test_dict, division_to_link_map, Y_mean=plotting_data, Y_std=None, X_mat=None, name='csv/' + "meas")
+
+    # Finalize y and R.
+    y = np.reshape(assimilation_data,(-1,1)) # Reshape observation vector.
+    abs_meas_std = test_dict['abs_std_meas']
+    rel_meas_std = test_dict['rel_std_meas']
+    R = (rel_meas_std * y.reshape(-1))**2 + abs_meas_std**2
+
+    # --- 5. EKI Main Loop ---
+    print("\n" + "="*60 + "\n" + "🚀  STARTING EKI PROCESS" +"\n"+ "="*60 + "\n")
+    for i in tqdm(range(step_num)):
+        # --- Prior Step ---
+        # Perturb posterior, transform, create prm file, and run model.
+        X_prior = pert(X_post, test_dict, division_to_link_map)
+        prm_ens_prior = transform_latent(test_dict, division_to_link_map, X_prior) 
+        create_prm(test_dict, sorted_link_ids, prm_ens_prior, ens)
+        Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)    
+        save_particles(test_dict, division_to_link_map, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
+        save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_prior, name='csv/' + str(i) + "_prior")
         
-    #     # Run EKI step, rerun model, record simulation results after assimilation - Posterior 
-    #     X_post = EnKF_step(y, X_prior, Y_prior, R, test_dict, i)
-    #     prm_ens_post, _ = transform_latent(test_dict, sparse_parent, X_post)
-    #     create_prm(test_dict, sorted_link_ids, prm_ens_post, ens)    
-    #     Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_test(ens, X_post, tmp_dir, col_idx_in_sav) 
-    #     save_particles(test_dict, sparse_parent, X_post, Y_plot_post, name='npy/' + str(i) + "_post")
-    #     save_statistics_csv(test_dict, sparse_parent, Y_plot_mean, Y_plot_std, X_post, name='csv/' + str(i) + "_post")
+        # --- Posterior Step (Assimilation) ---
+        # Update parameters with observations, rerun model to see improvement, and save results.
+        X_post = EnKF_step(y, X_prior, Y_prior, R, test_dict, i)
+        prm_ens_post = transform_latent(test_dict, division_to_link_map, X_post)
+        create_prm(test_dict, sorted_link_ids, prm_ens_post, ens)
+        Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_test(ens, X_post, tmp_dir, col_idx_in_sav) 
+        save_particles(test_dict, division_to_link_map, X_post, Y_plot_post, name='npy/' + str(i) + '_post')
+        save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_post, name='csv/' + str(i) + "_post")
 
-    # Visualization once EKI is done.
+    # --- 6. Visualization ---
+    # After all EKI steps are completed, generate visualizations of the results.
+    print("\n--- Generating Visualizations ---")
     visualize.main_visualization(test_dict)
+    print("\n--- EKI Workflow Complete ---")
        
     
-if __name__ == "__main__": 
+if __name__ == "__main__":
+    # The script is executed by passing the path to the YAML configuration file.
+    if len(sys.argv) < 2:
+        print("Usage: python eki_test.py <path_to_yaml_config>")
+        sys.exit(1)
     yaml_name = sys.argv[1]
-    # ens = int(sys.argv[2])
-    # main(yaml_name, ens)
     main(yaml_name)

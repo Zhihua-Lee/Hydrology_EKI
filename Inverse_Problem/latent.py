@@ -93,8 +93,7 @@ def transform_latent(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.
         latent_var (np.ndarray): Array of latent variables to transform.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray]: A tuple containing transformed parameter ensembles (prm_ens) and 
-                                       the list of sorted IDs (id_list).
+        np.ndarray: The transformed parameter ensembles (prm_ens).
     """
     #TODO: get to work with more (or less) prm numbers for different model numbers
     TOTAL_PRM_NUM = len(test_dict["prm_dist"])
@@ -110,8 +109,7 @@ def transform_latent(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.
     # Sort by ascending ID number and get total IDs
     id_list_arg = np.argsort(id_list_prm)
     prm_array = prm_list[id_list_arg,:] # sorted hlm prm_list, shape: (link_num, TOTAL_PRM_NUM)
-    id_list = np.sort(id_list_prm)
-    id_num = len(id_list)  
+    id_num = len(id_list_prm)
     ens = latent_var.shape[1]
    
     # Create a ensemble of parameter matricies
@@ -154,7 +152,7 @@ def transform_latent(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.
         else:   # otherwise, leave alone
             for j in range(ens):
                 prm_ens[i,:,j] = prm_array[:,i]
-    return prm_ens, id_list
+    return prm_ens
 
 def transform_latent_sparse(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.ndarray) -> np.ndarray:
     """
