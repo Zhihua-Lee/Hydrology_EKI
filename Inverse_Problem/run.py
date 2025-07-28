@@ -2,7 +2,7 @@ import os, sys
 import numpy as np
 import time
 from typing import List, Tuple, Dict, Union
-from io_ifc import update_prm_by_division
+from io_ifc import create_presim_prm_from_template, create_presim_gbl, create_presim_job_file
 from utils import get_ids, get_subwatershed
 
 def _wait_for_files(file_paths: List[str], timeout: int = 1800) -> List[np.ndarray]:
@@ -71,10 +71,16 @@ def _wait_for_files(file_paths: List[str], timeout: int = 1800) -> List[np.ndarr
 def generate_synthetic_data(test_dict: Dict) -> None:
     """
     Generates synthetic hydrograph data to be used as the 'true' observation.
-    This involves running a pre-simulation with known reference parameters.
+    This involves running a pre-simulation with known reference parameters by dynamically
+    creating all necessary configuration and job files.
     """
     print("\n--- Starting Pre-Simulation for Synthetic Data Generation ---")
-    
+
+    # Define the directory for presimulation files
+    presim_dir = os.path.join(os.path.dirname(test_dict['meas_series']), 'presim_run')
+    os.makedirs(presim_dir, exist_ok=True)
+    print(f"Created presimulation directory: {presim_dir}")
+
     prm_link_ids = get_ids(test_dict)
     sparse_parent, link_to_division_map = get_subwatershed(test_dict, prm_link_ids)
     num_divisions = sparse_parent.shape[0]
@@ -92,17 +98,26 @@ def generate_synthetic_data(test_dict: Dict) -> None:
             raise ValueError(f"Size of Cr_ref list ({len(cr_ref_config)}) does not match number of divisions ({num_divisions}).")
     else:
         raise TypeError("Cr_ref must be a number or a list.")
-    
-    print("Updating .prm file with reference Cr values for simulation.")
-    update_prm_by_division(test_dict['prm'], link_to_division_map, cr_ref_vec)
-    
+
+    # 1. Create the .prm file for the presimulation
+    presim_prm_path = os.path.join(presim_dir, "presim.prm")
+    template_prm_path = test_dict['prm'] # The original template
+    create_presim_prm_from_template(template_prm_path, presim_prm_path, link_to_division_map, cr_ref_vec)
+
+    # 2. Create the .gbl file for the presimulation
+    presim_gbl_path = os.path.join(presim_dir, "presim.gbl")
     output_csv = test_dict['meas_series']
-    sim_dir = os.path.join(os.path.dirname(test_dict['meas_series']), '')
+    create_presim_gbl(test_dict, presim_prm_path, presim_gbl_path, output_csv)
+    
+    # 3. Create the job submission file
+    job_file_path = create_presim_job_file(test_dict, presim_dir, presim_gbl_path)
+
     if os.path.isfile(output_csv):
         print(f"Removing old simulation output file: {output_csv}")
         os.remove(output_csv)
         
-    job_cmd = f"qsub {sim_dir}presimulate_Cr.sh"
+    # 4. Submit the job
+    job_cmd = f"qsub {job_file_path}"
     print(f"Submitting simulation job: {job_cmd}")
     os.system(job_cmd)
     

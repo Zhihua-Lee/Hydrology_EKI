@@ -2,6 +2,10 @@
                      Section: EKI                 
 ###################################################}
 
+# Project Root Path
+project_root: "/home/zli333/hpchome/DA/2025_EKI"
+
+
 # EKI Simulated Experiment Settings
 {% set using_simulated_data = True %} # to activate the if sentence below
 using_simulated_data: {{using_simulated_data}}               # loading simulated initial_data(condition), rainfall_data and hydrograph observations, 
@@ -73,6 +77,8 @@ time_end: 2021-09-01 23:00                         # Simulation/assimilation end
 parallel_argument: smp                             # option: 'orte', 'smp'
 num_parallel_slots: 8                              # number of slots assigned to each simulation(ensemble), 
                                                    # small -> slow, big -> not accessible from Argon
+scratch_dir: "/nfsscratch/Users/zli333/test"       # HPC High-performance temporary directory for model scratch work(HLM simulation)
+
 
 {% if using_simulated_data %}# using simulated data
 # HLM Forcing & Initial Data Paths
@@ -81,7 +87,7 @@ rvr: hlm_data/structure/sangamon.rvr                         # River network rou
 presimulate_initial_condition: True # Set to True to enable IC presimulation, False to disable
 initial_uini: hlm_data/Simulated_data/initial602.uini             # Initial state file (UINI)
 {# initial_rec: presimulate_initial_condition/rec/2016010100_2021080100.rec                     # Initial state file (rec) #}
-prm: hlm_data/Simulated_data/presimulate_hydrograph/sangamon_v6.prm               # Parameter template file (PRM) to indicate which links are used in ODE solver
+prm: hlm_data/parameter_templates/sangamon_v6.prm               # Parameter template file (PRM) to indicate which links are used in ODE solver
 evapo: hlm_data/Simulated_data/Temp&Evap_monthly/modis_2021.mon             # Monthly evaporation forcing file (MON)
 temp: hlm_data/Simulated_data/Temp&Evap_monthly/temperature.mon             # Monthly temperature forcing file (MON)  
 

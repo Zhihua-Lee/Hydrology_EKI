@@ -157,7 +157,7 @@ def create_gbl(test_dict: dict, ens: int) -> None:
         $START_TIME 
         $END_TIME
 
-        0	%Parameters to filenames
+        0\t%Parameters to filenames
 
         %Components to print
         1
@@ -222,7 +222,7 @@ def create_gbl(test_dict: dict, ens: int) -> None:
         0
 
         %Filename for scratch work
-        $TMP_DIR
+        $HPC_SCRATCH_DIR
 
         %Numerical solver settings follow
 
@@ -247,6 +247,7 @@ def create_gbl(test_dict: dict, ens: int) -> None:
     epoch_time_start = int(time_to_epoch(start_time))
     epoch_time_end = int(time_to_epoch(end_time))
     tmp_dir = test_dict["tmp_dir"]
+    scratch_dir = test_dict["scratch_dir"]
 
 
     for i in range(ens):
@@ -267,7 +268,7 @@ def create_gbl(test_dict: dict, ens: int) -> None:
             "TEMP_FILE": test_dict["temp"],
             "CSV_FILE": tmp_dir + str(i) + ".csv",
             "SAV_FILE": tmp_dir + 'meas.sav' ,
-            "TMP_DIR": tmp_dir + "_" + str(i),
+            "HPC_SCRATCH_DIR": os.path.join(scratch_dir, str(i)),
         }
     
         member_template = Template(gbl_template_str)
@@ -484,6 +485,264 @@ def update_prm_by_division(prm_file_path: str, link_to_division_map: dict, cr_re
         
     print(f"Finished updating {prm_file_path}.")
 
+def create_presim_prm_from_template(template_prm_path: str, output_prm_path: str, link_to_division_map: dict, cr_ref_vec: np.ndarray):
+    """
+    Creates a new .prm file from a template, assigning Cr values based on sub-watershed divisions.
+
+    Args:
+        template_prm_path (str): Full path to the template .prm file.
+        output_prm_path (str): Full path for the newly created .prm file.
+        link_to_division_map (dict): A pre-computed dictionary mapping each link ID to its division index.
+        cr_ref_vec (np.ndarray): A vector of Cr values where the index corresponds 
+                                 to the sub-watershed division ID.
+    """
+    print(f"Creating new PRM file '{output_prm_path}' from template '{template_prm_path}'...")
+    
+    with open(template_prm_path, 'r') as f:
+        lines = f.readlines()
+
+    updated_lines = []
+    
+    # Handle the first line (total link count) separately
+    if not lines:
+        print("Warning: Template PRM file is empty.")
+        return
+    updated_lines.append(lines[0])
+    
+    # Process the rest of the file in pairs (ID line, Parameter line)
+    i = 1
+    while i < len(lines):
+        # The current line should be the ID line.
+        id_line = lines[i].strip()
+        
+        # Find the next non-empty line for parameters
+        param_line_idx = i + 1
+        while param_line_idx < len(lines) and not lines[param_line_idx].strip():
+            param_line_idx += 1
+            
+        if not id_line: # If we encounter blank lines, just skip to the next
+            i += 1
+            continue
+            
+        if param_line_idx >= len(lines):
+            # Reached end of file with a trailing ID line, just append it
+            updated_lines.append(lines[i])
+            break
+
+        param_line = lines[param_line_idx].strip()
+
+        try:
+            current_link_id = int(id_line.split()[0])
+            
+            # Get the correct Cr value for this link
+            division_id = link_to_division_map.get(current_link_id)
+            
+            if division_id is not None:
+                cr_value_for_link = cr_ref_vec[division_id]
+                
+                # Modify the parameter line
+                tokens = param_line.split()
+                if len(tokens) >= 13:
+                    tokens[12] = str(cr_value_for_link)
+                else:
+                    tokens.append(str(cr_value_for_link))
+                
+                # Add the original ID line and the MODIFIED parameter line
+                updated_lines.append(lines[i])
+                updated_lines.append(" ".join(tokens) + "\n")
+            else:
+                # If link not in map, keep original pair of lines
+                updated_lines.append(lines[i])
+                updated_lines.append(lines[param_line_idx])
+
+        except (ValueError, IndexError):
+            # If the "ID line" isn't a valid ID, treat both as unstructured text and preserve them
+            print(f"Warning: Could not parse ID from line: '{id_line}'. Preserving original lines.")
+            updated_lines.append(lines[i])
+            updated_lines.append(lines[param_line_idx])
+
+        # Jump index past the processed pair
+        i = param_line_idx + 1
+
+    # Write the updated content back to the file
+    with open(output_prm_path, 'w') as f:
+        f.writelines(updated_lines)
+        
+    print(f"Finished creating {output_prm_path}.")
+
+
+def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: str, output_csv_path: str) -> None:
+    """
+    Creates the .gbl file for the presimulation run.
+    """
+    gbl_template_str = dedent("""
+        %Model UID
+        $MODEL_NUM
+
+        %Begin and end date time
+        $START_TIME 
+        $END_TIME
+
+        0\t%Parameters to filenames
+
+        %Components to print
+        1
+        State0
+
+        %Peakflow function
+        Classic
+
+        %Global parameters
+        %9 v_0   lambda_1 lambda_2 Hu(mm)   infil(mm/hr) perc(mm/hr)  res_surf[minutes]  res_subsurf[days]  res_gw[days]
+        $GLOBAL_PARAMS
+
+        %No. steps stored at each link and
+        %Max no. steps transfered between procs
+        %Discontinuity buffer size
+        30 10 30
+
+        %Topology (0 = .rvr, 1 = database)
+        0 $RVR_FILE
+
+        %DEM Parameters (0 = .prm, 1 = database)
+        0 $PRM_FILE
+
+        %Initial state (0 = .ini, 1 = .uini, 2 = .rec, 3 = .dbc, 3 = .h5)
+        1 $INI_FILE
+
+        %Forcings (0 = none, 1 = .str, 2 = binary, 3 = database, 4 = .ustr, 5 = forecasting, 6 = .gz binary, 7 = recurring)
+        3
+
+        %Rain
+        5 $RAIN_DIR
+        10 60 $EPOCH_START $EPOCH_END
+
+        %Evaporation
+        7 $EVAPO_FILE
+        $EPOCH_START $EPOCH_END
+
+        %Temperature 
+        7 $TEMP_FILE
+        $EPOCH_START $EPOCH_END
+
+        %Dam (0 = no dam, 1 = .dam, 2 = .qvs)
+        0
+
+        %Reservoir ids (0 = no reservoirs, 1 = .rsv, 2 = .dbc file)
+        0
+
+        %Where to put write hydrographs
+        %(0 = no output, 1 = .dat file, 2 = .csv file, 3 = database, 5 = .h5)
+        2 60 $CSV_FILE
+
+        %Where to put peakflow data
+        %(0 = no output, 1 = .pea file, 2 = database)
+        0 
+
+        %.sav files for hydrographs and peak file (meas.sav)
+        %(0 = save no data, 1 = .sav file, 2 = .dbc file, 3 = all links)
+        1 $SAV_FILE
+        0
+
+        %Snapshot information (0 = none, 1 = .rec, 2 = database, 3 = .h5, 4 = recurrent .h5)
+        0
+
+        %Filename for scratch work
+        $HPC_SCRATCH_DIR
+
+        %Numerical solver settings follow
+
+        %facmin, facmax, fac
+        .1 10.0 .9
+
+        %Solver flag (0 = data below, 1 = .rkd)
+        0
+        %Numerical solver index (0-3 explicit, 4 implicit)
+        2
+        %Error tolerances (abs, rel, abs dense, rel dense)
+        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
+
+        # %End of file
+    """)
+    
+    start_time = test_dict["time_start"]
+    end_time = test_dict["time_end"]
+    epoch_time_start = int(time_to_epoch(start_time))
+    epoch_time_end = int(time_to_epoch(end_time))
+
+    template_vars = {
+        "MODEL_NUM": test_dict["model_num"],
+        "START_TIME": start_time,
+        "END_TIME": end_time,
+        "GLOBAL_PARAMS": "11 1 50 3 1 20 35 0 5 0 20 1.0",
+        "RVR_FILE": test_dict["rvr"],
+        "PRM_FILE": presim_prm_path,
+        "INI_FILE": test_dict['initial_uini'],
+        "RAIN_DIR": test_dict["rain_dir"],
+        "EPOCH_START": str(epoch_time_start),
+        "EPOCH_END": str(epoch_time_end),
+        "EVAPO_FILE": test_dict["evapo"],
+        "TEMP_FILE": test_dict["temp"],
+        "CSV_FILE": output_csv_path,
+        "SAV_FILE": test_dict['meas_sav'],
+        "HPC_SCRATCH_DIR": test_dict['scratch_dir'],
+    }
+
+    member_template = Template(gbl_template_str)
+    member_content = member_template.safe_substitute(template_vars)
+    
+    with open(presim_gbl_path, "w") as f:
+        f.write(member_content)
+
+
+def create_presim_job_file(test_dict: dict, presim_dir: str, presim_gbl_path: str) -> str:
+    """
+    Create a batch job file for running the presimulation.
+
+    Args:
+        test_dict (dict): The configuration dictionary.
+        presim_dir (str): The directory for presimulation files.
+        presim_gbl_path (str): Path to the generated presimulation gbl file.
+
+    Returns:
+        str: The path to the created job file.
+    """
+    job_file_path = os.path.join(presim_dir, 'presimulate_job.sh')
+    
+    # Using settings from the original presimulate_Cr.sh
+    num_parallel_slots = 112 
+    parallel_argument = 'smp'
+    queue = 'IFC'
+    
+    with open(job_file_path, 'w') as f:
+        f.write('#!/bin/sh\n')
+        f.write('#$ -N Presimulate_using_Cr_ref\n')
+        f.write('#$ -j y\n')
+        f.write('#$ -cwd\n')
+        f.write(f'#$ -pe {parallel_argument} {num_parallel_slots}\n')
+        f.write('#$ -l mf=16G\n')
+        f.write(f'#$ -q {queue}\n')
+        f.write('#$ -m es\n')
+        f.write('#$ -M zli333@uiowa.edu\n')
+        # f.write('#$ -o /dev/null\n')
+        # f.write('#$ -e /dev/null\n')
+        f.write('\n')
+        f.write('/bin/echo Running on host: `hostname`.\n')
+        f.write('/bin/echo In directory: `pwd`\n')
+        f.write('/bin/echo Starting on: `date`\n')
+        f.write('\n')
+        f.write('module reset\n')
+        f.write('module load openmpi\n')
+        f.write('\n')
+        f.write(f'mkdir -p {test_dict["scratch_dir"]}\n')
+        f.write(f'mpirun -np {num_parallel_slots} /Users/zli333/DA/2025_EKI/exec/asynch/bin/asynch {presim_gbl_path}\n')
+        f.write(f'rm -r {test_dict["scratch_dir"]}\n')
+        
+    return job_file_path
+
 def create_meas_sav(test_dict: dict, model_link_ids: list) -> None:
     """
     Create a filtered SAV file by mapping gauge IDs (from observation)
@@ -519,9 +778,9 @@ def create_meas_sav(test_dict: dict, model_link_ids: list) -> None:
             print(f"Warning: Gauge ID {gauge_id} not found in USGS mapping.")
 
     # Write the filtered lines to a new SAV file
-    temp_sav_name = tmp_dir + "meas.sav"
-    os.makedirs(os.path.dirname(temp_sav_name), exist_ok=True)
-    with open(temp_sav_name, 'w') as f:
+    tmp_sav_name = tmp_dir + "meas.sav"
+    os.makedirs(os.path.dirname(tmp_sav_name), exist_ok=True)
+    with open(tmp_sav_name, 'w') as f:
         for line in new_lines:
             f.write("%s\n" % line)
 
@@ -684,21 +943,30 @@ def create_batch_job_file(test_dict, tmp_dir: str) -> None:
     """
     parallel_argument = test_dict['parallel_argument']
     num_parallel_slots = test_dict['num_parallel_slots']
+    scratch_dir = test_dict['scratch_dir']
+    
     with open(tmp_dir + 'submit_job.job', 'w') as f:
         f.write('#!/bin/bash\n')
         f.write('#$ -N EKI_job\n')
         # f.write('#$ -pe orte 2\n') # 每个数组作业任务都会获得 2 个 slot，而不是整个数组任务共用 2 个 slot。
         f.write(f'#$ -pe {parallel_argument} {num_parallel_slots}\n')
-        # f.write(f'#$ -pe smp {num_parallel_slots}\n')
+        # f.write('#$ -pe smp {num_parallel_slots}\n')
         # f.write('#$ -q AMCS\n')
         f.write('#$ -q IFC\n')
         f.write('#$ -cwd\n')
         f.write('#$ -o /dev/null\n')
         f.write('#$ -e /dev/null\n')
         f.write('\n')
+        f.write('/bin/echo Running on host: `hostname`.\n')
+        f.write('/bin/echo In directory: `pwd`\n')
+        f.write('/bin/echo Starting on: `date`\n')
+        f.write('\n')
         f.write('module reset\n')
         f.write('module load openmpi\n')
         f.write('\n')
-        f.write('filename=$(($SGE_TASK_ID - 1))\n')
-        f.write(f'mpirun -np {num_parallel_slots} /Users/zli333/DA/2025_EKI/exec/asynch/bin/asynch ' + tmp_dir + '$filename.gbl\n')
+        f.write('ensemble_id=$(($SGE_TASK_ID - 1))\n')
+        f.write(f'scratch_path="{scratch_dir}/$ensemble_id"\n')
+        f.write('mkdir -p "$scratch_path"\n')
+        f.write(f'mpirun -np {num_parallel_slots} /Users/zli333/DA/2025_EKI/exec/asynch/bin/asynch ' + tmp_dir + '$ensemble_id.gbl\n')
+        f.write('rm -r "$scratch_path"\n')
         # hpchome/executables/asynch/bin/asynch
