@@ -35,4 +35,4 @@ echo -e "\nExecuting command: $CMD"
 eval $CMD
 
 # Cr scan job to plot Cr-hydrograph curve
-# ~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/cr_scan.py ~/DA/2025_EKI/Inverse_Problem/config.j2
+# ~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/exploration/cr_scan.py ~/DA/2025_EKI/Inverse_Problem/config.j2
