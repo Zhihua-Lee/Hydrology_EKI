@@ -738,7 +738,9 @@ def create_presim_job_file(test_dict: dict, presim_dir: str, presim_gbl_path: st
         f.write('module load openmpi\n')
         f.write('\n')
         f.write(f'mkdir -p {test_dict["scratch_dir"]}\n')
-        f.write(f'mpirun -np {num_parallel_slots} /Users/zli333/DA/2025_EKI/exec/asynch/bin/asynch {presim_gbl_path}\n')
+        project_root = test_dict['project_root']
+        executable_path = os.path.join(project_root, 'exec/asynch/bin/asynch')
+        f.write(f'mpirun -np {num_parallel_slots} {executable_path} {presim_gbl_path}\n')
         f.write(f'rm -r {test_dict["scratch_dir"]}\n')
         
     return job_file_path
@@ -967,6 +969,8 @@ def create_batch_job_file(test_dict, tmp_dir: str) -> None:
         f.write('ensemble_id=$(($SGE_TASK_ID - 1))\n')
         f.write(f'scratch_path="{scratch_dir}/$ensemble_id"\n')
         f.write('mkdir -p "$scratch_path"\n')
-        f.write(f'mpirun -np {num_parallel_slots} /Users/zli333/DA/2025_EKI/exec/asynch/bin/asynch ' + tmp_dir + '$ensemble_id.gbl\n')
+        project_root = test_dict['project_root']
+        executable_path = os.path.join(project_root, 'exec/asynch/bin/asynch')
+        f.write(f'mpirun -np {num_parallel_slots} {executable_path} ' + tmp_dir + '$ensemble_id.gbl\n')
         f.write('rm -r "$scratch_path"\n')
         # hpchome/executables/asynch/bin/asynch
