@@ -7,6 +7,8 @@
 #$ -q IFC
 #$ -m es
 #$ -M zli333@uiowa.edu
+#$ -o /dev/null
+#$ -e /dev/null
 
 /bin/echo Running on host: `hostname`.
 /bin/echo In directory: `pwd`

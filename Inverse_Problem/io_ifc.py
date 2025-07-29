@@ -687,7 +687,7 @@ def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: st
         "EVAPO_FILE": test_dict["evapo"],
         "TEMP_FILE": test_dict["temp"],
         "CSV_FILE": output_csv_path,
-        "SAV_FILE": test_dict['meas_sav'],
+        "SAV_FILE": test_dict['link_sav'],
         "HPC_SCRATCH_DIR": test_dict['scratch_dir'],
     }
 
@@ -727,8 +727,8 @@ def create_presim_job_file(test_dict: dict, presim_dir: str, presim_gbl_path: st
         f.write(f'#$ -q {queue}\n')
         f.write('#$ -m es\n')
         f.write('#$ -M zli333@uiowa.edu\n')
-        # f.write('#$ -o /dev/null\n')
-        # f.write('#$ -e /dev/null\n')
+        f.write('#$ -o /dev/null\n')
+        f.write('#$ -e /dev/null\n')
         f.write('\n')
         f.write('/bin/echo Running on host: `hostname`.\n')
         f.write('/bin/echo In directory: `pwd`\n')

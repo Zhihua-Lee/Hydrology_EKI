@@ -95,7 +95,7 @@ temp: hlm_data/Simulated_data/Temp&Evap_monthly/temperature.mon             # Mo
 meas_series: hlm_data/Simulated_data/presimulate_hydrograph/Cr_sim_data.csv       # Path to observation data file (reference data, all time, all gauges id), need to fill blanks with zero
 usgs_csv: hlm_data/structure/usgs_gauges_linked.csv          # CSV mapping USGS gauge stations to link IDs
 meas_sav: hlm_data/structure/gauges.sav                      # Gauges Link ids to indicate which gauges are accessible in meas_series csv above
-link_sav: hlm_data/structure/sangamon.sav
+link_sav: hlm_data/structure/sangamon.sav                    # HLM Link ids of Gauges in meas_series csv above
 
 # Output & Temporary Paths (dynamically generated based on USGS station)
 out_dir: out/Simulated_Experiments/{{ meas_usgs_location }}/             # Output directory (auto-concatenated with USGS ID)

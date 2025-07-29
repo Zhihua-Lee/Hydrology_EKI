@@ -56,13 +56,13 @@ def main(yaml_name, visualize_only=False):
         if test_dict['watershed_csv'] is None:
             print("No watershed division file provided. Assuming a single global parameter set.")
             # The map should represent one division containing all links.
-            # Its shape must be (num_divisions, num_links), which is (1, num_links).
-            num_links = len(sorted_link_ids)
-            division_to_link_map = np.ones((1, num_links))
+            # Its shape must be (n_divisions, n_links), which is (1, n_links).
+            n_links = len(sorted_link_ids)
+            division_to_link_map = np.ones((1, n_links)) # (n_divisions, n_links)
         else:
             print(f"Loading watershed divisions from: {test_dict['watershed_csv']}")
             # Pass sorted_link_ids to ensure consistency.
-            division_to_link_map, _ = get_subwatershed(test_dict, sorted_link_ids) 
+            division_to_link_map, _ = get_subwatershed(test_dict, sorted_link_ids) # (n_divisions, n_links)
         # ANNOTATION: The 'division_to_link_map' matrix is a transformation operator that maps parameters
         # defined at the watershed division level to the individual link level.
         # - Shape: (number_of_divisions, number_of_links)
@@ -82,8 +82,8 @@ def main(yaml_name, visualize_only=False):
         # This stage prepares all dynamic variables required to start the EKI main loop.
 
         # A. Prepare State Vector (X).
-        print("Initializing state vector X_post...")
-        X_post = create_latent(test_dict, division_to_link_map, ens) # Initialize the posterior as the initial latent variables.
+        print("Initializing X_post as the initial latent variables....")
+        X_post = create_latent(test_dict, division_to_link_map, ens) # (n_latent_params, n_divisions, n_ens)
 
         # B. Prepare Observation Vector (y) and Error Covariance Diagonal (R).
         print("Preparing observation vector y and error covariance diagonal R...")
@@ -101,31 +101,31 @@ def main(yaml_name, visualize_only=False):
         print("Loading and processing observation data...")
         assimilation_data, plotting_data, _, col_idx_in_sav = load_and_process_observations(
             test_dict, output_file_link_id_order, usgs_to_link_id, sorted_link_ids
-        )
+        )  # assimilation_data(flattened): (n_gauges * t_steps,);   plotting_data: (t_steps, n_gauges)
         print("Saving initial measurement statistics...")
         save_statistics_csv(test_dict, division_to_link_map, Y_mean=plotting_data, Y_std=None, X_mat=None, name='csv/' + "meas")
 
         # Finalize y and R.
-        y = np.reshape(assimilation_data,(-1,1)) # Reshape observation vector.
+        y = np.reshape(assimilation_data,(-1,1)) # Reshape observation vector as: (n_gauges * t_steps, 1)
         abs_meas_std = test_dict['abs_std_meas']
         rel_meas_std = test_dict['rel_std_meas']
-        R = (rel_meas_std * y.reshape(-1))**2 + abs_meas_std**2
+        R = (rel_meas_std * y.reshape(-1))**2 + abs_meas_std**2  # (n_gauges * t_steps,)
 
         # --- 5. EKI Main Loop ---
         print("\n" + "="*60 + "\n" + "🚀  STARTING EKI PROCESS" +"\n"+ "="*60 + "\n")
         for i in tqdm(range(step_num)):
             # --- Prior Step ---
             # Perturb posterior, transform, create prm file, and run model.
-            X_prior = pert(X_post, test_dict, division_to_link_map)
-            prm_ens_prior = transform_latent(test_dict, division_to_link_map, X_prior) 
+            X_prior = pert(X_post, test_dict, division_to_link_map)             # (n_latent_params, n_divisions, n_ens)
+            prm_ens_prior = transform_latent(test_dict, division_to_link_map, X_prior)              # (n_physical_params, n_links, n_ens)
             create_prm(test_dict, sorted_link_ids, prm_ens_prior, ens)
-            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)    
+            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)     # (n_gauges * t_steps, n_ens)    
             save_particles(test_dict, division_to_link_map, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_prior, name='csv/' + str(i) + "_prior")
             
             # --- Posterior Step (Assimilation) ---
             # Update parameters with observations, rerun model to see improvement, and save results.
-            X_post = EnKF_step(y, X_prior, Y_prior, R, test_dict, i)
+            X_post = EnKF_step(y, X_prior, Y_prior, R, test_dict, i)            
             prm_ens_post = transform_latent(test_dict, division_to_link_map, X_post)
             create_prm(test_dict, sorted_link_ids, prm_ens_post, ens)
             Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_test(ens, X_post, tmp_dir, col_idx_in_sav) 

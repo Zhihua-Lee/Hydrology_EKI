@@ -77,7 +77,7 @@ time_end: 2021-09-01 23:00                         # Simulation/assimilation end
 parallel_argument: smp                             # option: 'orte', 'smp'
 num_parallel_slots: 8                              # number of slots assigned to each simulation(ensemble), 
                                                    # small -> slow, big -> not accessible from Argon
-scratch_dir: "/nfsscratch/Users/zli333/test"       # High-performance temporary directory for model scratch work
+scratch_dir: "/nfsscratch/Users/zli333/test"       # HPC High-performance temporary directory for model scratch work(HLM simulation)
 
 
 {% if using_simulated_data %}# using simulated data
@@ -95,7 +95,7 @@ temp: hlm_data/Simulated_data/Temp&Evap_monthly/temperature.mon             # Mo
 meas_series: hlm_data/Simulated_data/presimulate_hydrograph/Cr_sim_data.csv       # Path to observation data file (reference data, all time, all gauges id), need to fill blanks with zero
 usgs_csv: hlm_data/structure/usgs_gauges_linked.csv          # CSV mapping USGS gauge stations to link IDs
 meas_sav: hlm_data/structure/gauges.sav                      # Gauges Link ids to indicate which gauges are accessible in meas_series csv above
-link_sav: hlm_data/structure/sangamon.sav
+link_sav: hlm_data/structure/sangamon.sav                    # HLM Link ids of Gauges in meas_series csv above
 
 # Output & Temporary Paths (dynamically generated based on USGS station)
 out_dir: out/Simulated_Experiments/{{ meas_usgs_location }}/             # Output directory (auto-concatenated with USGS ID)

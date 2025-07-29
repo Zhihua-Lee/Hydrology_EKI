@@ -64,7 +64,7 @@ Classic
 
 %.sav files for hydrographs and peak file (meas.sav)
 %(0 = save no data, 1 = .sav file, 2 = .dbc file, 3 = all links)
-1 tmp/Simulated_Experiments/5582000/meas.sav
+1 hlm_data/structure/sangamon.sav
 0
 
 %Snapshot information (0 = none, 1 = .rec, 2 = database, 3 = .h5, 4 = recurrent .h5)
