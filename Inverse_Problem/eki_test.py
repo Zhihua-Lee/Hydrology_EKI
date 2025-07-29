@@ -40,7 +40,6 @@ def main(yaml_name, visualize_only=False):
         print(f"Copying essential files to output directory: {out_dir}")
         shutil.copyfile(yaml_name, os.path.join(out_dir, 'test_config.j2'))
         shutil.copy(test_dict['initial_uini'], out_dir)
-        shutil.copy(test_dict['meas_series'], out_dir)
         os.makedirs(os.path.join(out_dir, 'csv/'), exist_ok=True)
         os.makedirs(os.path.join(out_dir, 'npy/'), exist_ok=True)
 
@@ -97,6 +96,9 @@ def main(yaml_name, visualize_only=False):
         else:
             print("Using real observation data. Skipping pre-simulation step.")
         
+        # Now that the measurement data is confirmed to exist, copy it for reproducibility.
+        shutil.copy(test_dict['meas_series'], out_dir)
+
         # Load and process observation data now that .sav file exists.
         print("Loading and processing observation data...")
         assimilation_data, plotting_data, _, col_idx_in_sav = load_and_process_observations(
