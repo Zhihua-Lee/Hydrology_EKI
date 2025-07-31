@@ -121,12 +121,11 @@ def main(yaml_name, visualize_only=False):
         for i in tqdm(range(step_num)):
             # --- Prior Step ---
             X_prior = perturb_ensemble(X_post, test_dict, division_to_link_map)
-            
             # Prepare files and then run the simulation ensemble on HPC
             run_hpc_prm_generation_ensemble(
                 test_dict, X_prior, ens, division_to_link_map.shape[0], link_to_division_map
             )
-            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_hpc_simulation_ensemble(ens, X_prior, tmp_dir, col_idx_in_sav)
+            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std  = run_hpc_simulation_ensemble(ens, X_prior, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_prior, name='csv/' + str(i) + "_prior")
             
@@ -142,7 +141,7 @@ def main(yaml_name, visualize_only=False):
             run_hpc_prm_generation_ensemble(
                 test_dict, X_post, ens, division_to_link_map.shape[0], link_to_division_map
             )
-            Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_hpc_simulation_ensemble(ens, X_post, tmp_dir, col_idx_in_sav)
+            Y_post, Y_plot_post, Y_plot_mean, Y_plot_std = run_hpc_simulation_ensemble(ens, X_post, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_post, Y_plot_post, name='npy/' + str(i) + '_post')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_post, name='csv/' + str(i) + "_post")
     else:

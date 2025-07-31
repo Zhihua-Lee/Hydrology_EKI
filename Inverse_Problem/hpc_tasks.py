@@ -211,12 +211,8 @@ def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas:
     Y_plot_mean = np.mean(np.array(read_values_fixed), axis=0)
     Y_plot_std = np.std(np.array(read_values_fixed), axis=0)
     Y_plot = np.array(read_values_fixed)
-    
-    X_plot_mean = np.mean(X, axis=1, keepdims=True)
-    X_plot_std = np.std(X, axis=1, keepdims=True)
-    
     for csv_path in csv_paths:
         if os.path.isfile(csv_path):
             os.remove(csv_path)
     
-    return Y, Y_plot, Y_plot_mean, Y_plot_std, X_plot_mean, X_plot_std
+    return Y, Y_plot, Y_plot_mean, Y_plot_std

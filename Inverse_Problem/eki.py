@@ -114,24 +114,24 @@ def _EnKF_svd(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.nd
     Y_prime = Y_pre - y_mean
 
     # Perturb observations for each ensemble member
-    R = np.diag(R_diag)
     pert_vec = np.random.normal(0, 1, (n_y, n_ens))
-    y_pert = y + np.sqrt(R) @ pert_vec
+    # Efficiently perturb observations without creating a full R matrix
+    y_pert = y + np.sqrt(R_diag)[:, np.newaxis] * pert_vec
     
     # Innovation (difference between perturbed obs and predictions)
     d = y_pert - Y_pre
 
     # Use SVD to solve the update equation efficiently
     # This avoids forming the (n_y, n_y) matrix Y*Y' + R
-    R_inv = np.diag(1.0 / R_diag)
     
     # The core of the SVD method is to operate in the ensemble space (n_ens, n_ens)
     # This matrix is much smaller than the observation space matrix
-    M = Y_prime.T @ R_inv @ Y_prime + (n_ens - 1) * np.eye(n_ens)
+    # Use element-wise division instead of full R_inv matrix multiplication
+    M = (Y_prime.T / R_diag) @ Y_prime + (n_ens - 1) * np.eye(n_ens)
     
     # Solve for the update in ensemble space
     # (Y' R_inv d) has shape (n_ens, n_ens)
-    update_ens_space = np.linalg.solve(M, (Y_prime.T @ R_inv @ d))
+    update_ens_space = np.linalg.solve(M, (Y_prime.T / R_diag) @ d)
 
     # Project the update back to the parameter space
     update = X_prime @ update_ens_space
