@@ -17,42 +17,33 @@ def convert_logical(str_list: list) -> list:
     return [json.loads(i.lower()) for i in str_list]
     
 
-def create_latent(test_dict: dict, sparse_parent: np.ndarray, ens: int) -> np.ndarray:
+def create_latent(test_dict: dict, division_to_link_map: np.ndarray, ens: int) -> np.ndarray:
     """
-    Create a matrix of latent parameter values based on the given test dictionary and sparse parent information.
+    Initializes the latent parameter ensemble (X) for the EKI process.
+
+    This function generates the initial set of parameters in a latent (unbounded, normalized)
+    space. These parameters correspond to watershed divisions, not individual links.
 
     Args:
-        test_dict (dict): Test dictionary containing required parameters.
-        sparse_parent (np.ndarray): Sparse parent information.
-        ens (int): Number of parameter ensembles to create.
+        test_dict (dict): The main configuration dictionary.
+        division_to_link_map (np.ndarray): A sparse matrix mapping divisions to links.
+                                           Its shape (n_divisions, n_links) provides the number of divisions.
+        ens (int): The number of ensemble members to generate.
 
     Returns:
-        np.ndarray: A matrix of latent parameter values with shape (total_parameters, ens).
+        np.ndarray: The initial latent parameter ensemble array (X_post).
+                    Shape: (n_latent_params, n_divisions, n_ens).
     """
-    
-    # Extract required parameters from the test dictionary
     include_parameters = convert_logical(test_dict["prm_dist"])
+    n_divisions = division_to_link_map.shape[0]
+    n_active_params = sum(include_parameters)
 
-    # Calculate the number of parent points and total parameters
-    parent_num = sparse_parent.shape[0]
-    total_active = np.sum(include_parameters) #Total number of included prm values
-    tot_param_num = total_active * parent_num
+    # Generate all random values from a standard normal distribution at once.
+    # The distribution is centered at 0 with a standard deviation from the config.
+    latent_mat = np.random.normal(0, test_dict['sig_P0'], (n_active_params, n_divisions, ens))
 
-    # Create an empty matrix to store the latent parameter values
-    latent_mat = np.zeros((tot_param_num, ens))
-    loc = 0  # Index to keep track of the current position in the latent matrix
-
-    # Generate latent parameter values based on the distribution type
-    for i, dist in enumerate(include_parameters):
-        if dist:  # Check if the parameter is included
-            # Generate random latent parameter values from a standard normal distribution
-            lv = np.random.normal(0, test_dict['sig_P0'], (parent_num, ens))
-            latent_mat[loc:loc + parent_num, :] = lv
-            loc = loc + parent_num
-
-    # 检查是否出现 NaN
     if np.isnan(latent_mat).any():
-        print("Warning: NaN found in create_latent's latent_mat!")
+        print("Warning: NaN found in the initial latent matrix created by create_latent!")
 
     return latent_mat
 
@@ -83,108 +74,59 @@ def unbounded_to_bounded(x: np.ndarray, lb: float, ub: float) -> np.ndarray:
     return res
 
 
-def transform_latent(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def transform_latent_to_physical(
+    test_dict: dict, 
+    X_ensemble: np.ndarray,
+    n_divisions: int
+) -> np.ndarray:
     """
-    Transform latent variables to parameter ensembles based on the given test dictionary and sparse parent data.
+    Transforms latent variables into bounded, physical-space parameters at the DIVISION level.
+    This function is vectorized and handles both a single member (2D) and a full ensemble (3D).
 
     Args:
-        test_dict (dict): Test dictionary containing required parameters.
-        sparse_parent (np.ndarray): Array representing the sparse parent data.
-        latent_var (np.ndarray): Array of latent variables to transform.
+        test_dict (dict): Configuration dictionary.
+        X_ensemble (np.ndarray): A 2D or 3D array of latent variables.
+                                 Shape: `(n_active_params, n_divisions)` for a single member,
+                                 or `(n_active_params, n_divisions, n_ens)` for the full ensemble.
+        n_divisions (int): The number of watershed divisions.
 
     Returns:
-        np.ndarray: The transformed parameter ensembles (prm_ens).
+        np.ndarray: A 2D or 3D array of physical parameters, corresponding to the input shape.
+                    Shape: `(n_total_physical_params, n_divisions)` or `(n_total_physical_params, n_divisions, n_ens)`.
+                    Parameters not being updated when creating .prm files will have a value of np.nan as placeholder.
     """
-    #TODO: get to work with more (or less) prm numbers for different model numbers
-    TOTAL_PRM_NUM = len(test_dict["prm_dist"])
-    # TOTAL_608_PRM_NUM = 18
-    
-    # Read template PRM file and extract data
-    prm_name = test_dict['prm']
-    with open(prm_name, 'r') as f:
-        prm_lines = [line for line in f.readlines() if line.strip()]
-    id_list_prm = [int(i.strip('\n')) for i in prm_lines[1::2]]
-    prm_list = np.array([[float(i) for i in line.strip('\n').split()] for line in prm_lines[2::2]]) # shape: (link_num, TOTAL_PRM_NUM)
-    
-    # Sort by ascending ID number and get total IDs
-    id_list_arg = np.argsort(id_list_prm)
-    prm_array = prm_list[id_list_arg,:] # sorted hlm prm_list, shape: (link_num, TOTAL_PRM_NUM)
-    id_num = len(id_list_prm)
-    ens = latent_var.shape[1]
-   
-    # Create a ensemble of parameter matricies
-    prm_ens = np.zeros((TOTAL_PRM_NUM,id_num,ens)) # EKI parameters, shape: (TOTAL_PRM_NUM,link_num,ens)
-    out_num = sparse_parent.shape[0]
-
-    # Get parameters for transformation
     include_parameters = convert_logical(test_dict["prm_dist"])
     lower_bounds = test_dict['prm_lb']
     upper_bounds = test_dict['prm_ub']
+    
+    num_active_params = sum(include_parameters)
+    if num_active_params == 0:
+        return np.array([]) # Return empty if no parameters are active
+        
+    TOTAL_PRM_NUM = len(include_parameters)
 
-    loc = 0
-    for i, dist in enumerate(include_parameters):
-        if dist is True: # Check if using paramters
-            # Define bounds
+    # Accommodate both 2D (single member) and 3D (full ensemble) inputs
+    was_2d = X_ensemble.ndim == 2
+    X_proc = np.expand_dims(X_ensemble, axis=2) if was_2d else X_ensemble
+    n_ens = X_proc.shape[2]
+
+    # Create an output array initialized with NaNs
+    physical_params_out = np.full((TOTAL_PRM_NUM, n_divisions, n_ens), np.nan)
+
+    active_param_idx = 0
+    for i, do_transform in enumerate(include_parameters):
+        if do_transform:
+            # Extract the 2D slice (divisions, ens) from the processing array
+            latent_slice_2d = X_proc[active_param_idx, :, :]
+            
+            # Get bounds and apply the transformation to the entire 2D slice at once
             lb = float(lower_bounds[i])
             ub = float(upper_bounds[i])
             
-            # Convert from sparse to full space
-            lv = (sparse_parent.T)@latent_var[loc:(loc+out_num),:] # shape: (out_num, ens).T * (id_num, out_num)
+            physical_values_2d = unbounded_to_bounded(latent_slice_2d, lb, ub)
+            physical_params_out[i, :, :] = physical_values_2d
             
-            #Apply transformation, and round to 5 digits (necessary for asynch, otherwise will fail)
-            transform_func = lambda x: float(
-                np.format_float_positional(
-                    unbounded_to_bounded(x, lb, ub), # using $\tanh$ like functions to map any real num x to [lb, ub]
-                    precision=5, unique=False, fractional=False, trim='k'
-                )
-            )
-            vec_transform_func = np.vectorize(transform_func)
-            var_val = vec_transform_func(lv)
-
-            # NaN checking
-            if np.isnan(var_val).any():
-                print(f"Warning: NaN in transform_latent for parameter index={i}, lb={lb}, ub={ub}!")
-
-            prm_ens[i,:,:] = var_val
-            
-            #Advance forward
-            loc = loc + out_num
-        else:   # otherwise, leave alone
-            for j in range(ens):
-                prm_ens[i,:,j] = prm_array[:,i]
-    return prm_ens
-
-def transform_latent_sparse(test_dict: dict, sparse_parent: np.ndarray, latent_var: np.ndarray) -> np.ndarray:
-    """
-    Transform sparse latent variables to bounded parameter ensemble based on the given test dictionary and sparse parent data.
-
-    Args:
-        test_dict (dict): Test dictionary containing required parameters.
-        sparse_parent (np.ndarray): Array representing the sparse parent data.
-        latent_var (np.ndarray): Array of sparse latent variables to transform.
-
-    Returns:
-        np.ndarray: Transformed parameter ensemble (prm_ens) with bounds applied.
-    """
-    out_num = sparse_parent.shape[0]
-    sparse_transformed = np.zeros(latent_var.shape)
-
-    include_parameters = convert_logical(test_dict["prm_dist"])
-    lower_bounds = test_dict['prm_lb']
-    upper_bounds = test_dict['prm_ub']
-
-    loc = 0
-    for i, dist in enumerate(include_parameters):
-        if dist is True:
-            # Define bounds
-            lb = float(lower_bounds[i])
-            ub = float(upper_bounds[i])
-            
-            # Applies transformation
-            lv = latent_var[loc:(loc + out_num), :]
-            tmp = unbounded_to_bounded(lv, lb, ub)
-            if np.isnan(tmp).any():
-                print(f"Warning: NaN in transform_latent_sparse for param i={i}, lb={lb}, ub={ub}!")
-            sparse_transformed[loc:loc+out_num, :] = tmp
-            loc = loc + out_num
-    return sparse_transformed
+            active_param_idx += 1
+    
+    # Return array with shape corresponding to the input shape
+    return np.squeeze(physical_params_out, axis=2) if was_2d else physical_params_out

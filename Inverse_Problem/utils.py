@@ -89,91 +89,85 @@ def get_ids(test_dict: dict) -> List[int]:
     return id_list
 
 
-def get_subwatershed(test_dict, id_list_use):
+def get_subwatershed(test_dict: dict, sorted_link_ids: List[int]) -> Tuple[coo_matrix, Dict[int, int]]:
     """
-    Get a sparse matrix representing the subwatershed and a map from link ID to division ID.
-    
+    Constructs the mapping between watershed divisions and individual river links.
+
+    This function reads a CSV file that defines how larger watershed areas (divisions)
+    are broken down into smaller, individual river segments (links). It produces two key outputs:
+    a sparse matrix that acts as a transformation operator and a direct dictionary mapping.
+
     Args:
-        test_dict (dict): Test dictionary containing required parameters.
-        id_list_use (List[int]): List of IDs to use for subsetting the subwatershed.
+        test_dict (dict): The configuration dictionary, containing keys like 'watershed_csv' 
+                          and 'watershed_depth'.
+        sorted_link_ids (List[int]): The authoritative, sorted list of all link IDs that the 
+                                     model will simulate. This ensures consistency.
 
     Returns:
-        Tuple[coo_matrix, dict]: A tuple containing:
-            - sparse_parent: Sparse matrix representing the subwatershed.
-            - link_to_division_map: A dictionary mapping each link ID to its division index.
+        Tuple[coo_matrix, Dict[int, int]]: A tuple containing:
+        
+        - division_to_link_map (coo_matrix): A sparse matrix of shape (n_divisions, n_links).
+          A '1' at `matrix[i, j]` indicates that link `j` is part of division `i`.
+          This matrix is primarily used via its transpose to efficiently broadcast or aggregate 
+          parameters between the division level and the link level.
+          
+        - link_to_division_map (Dict[int, int]): A dictionary that provides a direct lookup from 
+          any individual `link_id` (int) to its corresponding `division_id` (int).
     """
-    # Gets division value
     watershed_csv = test_dict["watershed_csv"]
     watershed_depth = test_dict["watershed_depth"]
+    
+    # 1. Load the raw watershed division data from the CSV file.
     watershed_vals = np.genfromtxt(watershed_csv, delimiter=',', skip_header=True)
     id_subwatershed = watershed_vals[:, 0]
     idx_sort = np.argsort(id_subwatershed)
-    id_list = id_subwatershed[idx_sort]
+    id_list_from_file = id_subwatershed[idx_sort]
 
-    """或许需要改：更换了地形和link继承关系"""
-    # Selects the relevent column for index
-    if watershed_depth == 4:
-        idx_col = 1
-    elif watershed_depth == 5:
-        idx_col = 2
-    elif watershed_depth == 6:
-        idx_col = 3
-    elif watershed_depth == 7:
-        idx_col = 4
-    elif watershed_depth == 8:
-        idx_col = 5
+    # 2. Select the correct column for the desired watershed hierarchy depth.
+    depth_to_col_map = {4: 1, 5: 2, 6: 3, 7: 4, 8: 5}
+    if watershed_depth not in depth_to_col_map:
+        raise ValueError(f"Unsupported watershed_depth: {watershed_depth}. Must be one of {list(depth_to_col_map.keys())}.")
+    idx_col = depth_to_col_map[watershed_depth]
+    
+    # Division IDs from the file (adjusting for 1-based indexing).
+    division_ids_from_file = (watershed_vals[idx_sort, idx_col] - 1).astype(int)
 
-    id_divs = (watershed_vals[idx_sort, idx_col] - 1).astype(int)
-    # id_divs = (watershed_vals[idx_sort, idx_col] ).astype(int) # If ids in the watershed file is starting from 0 but not 1
-
+    # 3. Filter the data to include only the links present in the authoritative `sorted_link_ids`.
     id_tmp = []
     id_div_tmp = []
+    for i, link_id in enumerate(id_list_from_file):
+        if link_id in sorted_link_ids:
+            id_tmp.append(link_id)
+            id_div_tmp.append(division_ids_from_file[i])
     
-    # Get only ids in id_list_use
-    for i, id_val in enumerate(id_list):
-        if id_val in id_list_use:
-            id_tmp.append(id_val)
-            id_div_tmp.append(id_divs[i])
-    id_tmp = np.array(id_tmp)
-    # id_div_tmp = np.array(id_div_tmp)
-    id_div_tmp_orig = np.array(id_div_tmp) # Keep original division IDs for mapping
-    # Create the link_id to original division_id mapping BEFORE re-indexing
-    # This map uses the original division IDs from the file (minus 1)
-    link_to_division_map_orig = {int(link): int(div) for link, div in zip(id_tmp, id_div_tmp_orig)}
+    id_links_final = np.array(id_tmp)
+    id_divisions_orig = np.array(id_div_tmp)
 
-    
-    # Assigns value from 0 to max to each for divisions, used to eliminate unused indices
-    # divs_new = 0
-    # max_div = np.max(id_div_tmp_orig)
-    id_div_tmp_new = np.copy(id_div_tmp_orig) # Use a copy for re-indexing
-
-    unique_orig_divs = np.sort(np.unique(id_div_tmp_orig))
+    # 4. Re-index the division IDs to be sequential (0, 1, 2, ...).
+    # This is crucial for creating a minimal-sized sparse matrix.
+    unique_orig_divs = np.sort(np.unique(id_divisions_orig))
     orig_to_new_map = {orig_div: new_idx for new_idx, orig_div in enumerate(unique_orig_divs)}
-
-    # for i in range(max_div + 1):
-    #     count_i = np.sum(id_div_tmp_orig == i)
-    #     if count_i > 0:
-    #         id_div_tmp[id_div_tmp == i] = divs_new
-    #         divs_new += 1
-    for i in range(len(id_div_tmp_new)):
-        id_div_tmp_new[i] = orig_to_new_map[id_div_tmp_orig[i]]
-        
-    # Create the final map from link_id to the NEW, sequential division index
-    link_to_division_map_final = {int(link): int(new_div) for link, new_div in zip(id_tmp, id_div_tmp_new)}
-
-    id_num = len(id_tmp)
-    subws_num = len(np.unique(id_div_tmp_new))
     
-    # Create sparse matrix to convert from full parameters to sparse representation
-    # Create sparse matrix using the new sequential division indices
-    val_vals = np.ones(id_num)
-    col_vals = np.arange(id_num)
-    row_vals = id_div_tmp_new
-    sparse_parent = coo_matrix((val_vals, (row_vals, col_vals)), shape=(subws_num, id_num))
+    id_divisions_new = np.array([orig_to_new_map[orig_div] for orig_div in id_divisions_orig])
 
+    # 5. Create the final outputs.
+    # The dictionary maps each link ID to its *new*, sequential division index.
+    link_to_division_map = {int(link): int(new_div) for link, new_div in zip(id_links_final, id_divisions_new)}
 
-    # Return both the matrix and the final mapping
-    return sparse_parent, link_to_division_map_final
+    # The sparse matrix uses the re-indexed divisions and the final, sorted link list.
+    n_links = len(sorted_link_ids)
+    n_divisions = len(unique_orig_divs)
+    
+    # Create a mapping from link_id to its index in the sorted list for matrix column lookup.
+    link_id_to_idx = {link_id: i for i, link_id in enumerate(sorted_link_ids)}
+    
+    row_vals = [link_to_division_map[link_id] for link_id in sorted_link_ids if link_id in link_to_division_map]
+    col_vals = [link_id_to_idx[link_id] for link_id in sorted_link_ids if link_id in link_to_division_map]
+    val_vals = np.ones(len(row_vals))
+
+    division_to_link_map = coo_matrix((val_vals, (row_vals, col_vals)), shape=(n_divisions, n_links))
+
+    return division_to_link_map, link_to_division_map
 
 def load_and_process_observations(test_dict: Dict, file_order: np.ndarray, usgs_to_link_id: Dict, sorted_link_ids: List[int]) -> Tuple:
     """

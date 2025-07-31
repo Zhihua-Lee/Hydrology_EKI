@@ -36,39 +36,40 @@ def subsample_data(data: np.ndarray, test_dict: dict, id_list: List[int], file_o
 
     return meas_vals, ids_meas
 
-def pert(X, test_dict, sparse_parent):
+def pert(X: np.ndarray, test_dict: dict, division_to_link_map: np.ndarray) -> np.ndarray:
     """
-    Perturb the latent parameter ensemble 'X' based on the given test dictionary and sparse parent matrix.
+    Perturbs the latent parameter ensemble (X) by adding random noise.
+
+    This function adds Gaussian noise to the existing latent parameter ensemble.
+    The standard deviation of the noise for each parameter type is specified in the configuration.
+    This step is essential for exploring the parameter space in the EKI.
 
     Args:
-        X (np.ndarray): Latent parameter ensemble to be perturbed. shape = (n_params, ensemble_size)
-        test_dict (dict): Test dictionary containing required parameters.
-        sparse_parent (coo_matrix): Sparse parent matrix.
+        X (np.ndarray): The latent parameter ensemble to be perturbed.
+                        Shape: (n_latent_params, n_divisions, n_ens).
+        test_dict (dict): The main configuration dictionary.
+        division_to_link_map (np.ndarray): A sparse matrix mapping divisions to links.
+                                           Used here to get the number of divisions.
 
     Returns:
-        np.ndarray: Perturbed latent parameter ensemble 'X'.
+        np.ndarray: The perturbed latent parameter ensemble.
+                    Shape is the same as the input X.
     """
-    def str2bool(s):
-        return str(s).strip().lower() in ['true', '1', 'yes']
-    
-    prm_lb = test_dict['prm_lb']
-    prm_ub = test_dict['prm_ub']
     prm_std = test_dict['prm_std']
-    # std_val = test_dict['rel_std_meas'] # not used here
-    prm_dist = [str2bool(i) for i in test_dict["prm_dist"]]
-    parent_num = sparse_parent.shape[0]
-    loc = 0
-    ens = X.shape[1]
+    include_parameters = [json.loads(i.lower()) for i in test_dict["prm_dist"]]
     
-    for i, dist in enumerate(prm_dist):
-        if dist is True:
-            lb = float(prm_lb[i])
-            ub = float(prm_ub[i])
-            std = prm_std[i]
-            # std = (ub-lb) * prm_std[i]
-            X[loc:loc+parent_num, :] += np.random.normal(0, std, (parent_num, ens)) # adding normal noise in latent space
-            loc = loc + parent_num
-    return X
+    n_active_params, n_divisions, n_ens = X.shape
+    
+    # Create the noise array, scaling the standard deviation for each active parameter.
+    noise = np.zeros_like(X)
+    active_idx = 0
+    for i, do_pert in enumerate(include_parameters):
+        if do_pert:
+            std = float(prm_std[i])
+            noise[active_idx, :, :] = np.random.normal(0, std, (n_divisions, n_ens))
+            active_idx += 1
+            
+    return X + noise
 
 def _EnKF_standard(X_pre: np.ndarray, Y_pre: np.ndarray, y: np.ndarray, R_diag: np.ndarray) -> np.ndarray:
     """
@@ -502,7 +503,9 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
 
     Args:
         y (np.ndarray): 1D array representing the observation/measurement data.
-        X (np.ndarray): 2D array representing the ensemble of state vectors.
+        X (np.ndarray): The prior latent parameter ensemble. This MUST be a 2D array where
+                        parameters have been flattened for each ensemble member.
+                        Shape: (n_params * n_divisions, n_ens).
         Y (np.ndarray): 2D array representing the ensemble forecast time series.
         R (np.ndarray): 1D array representing the measurement error covariance.
         test_dict (Dict[str, Union[str, float]]): Test dictionary containing configuration parameters.
@@ -510,6 +513,7 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
 
     Returns:
         np.ndarray: The updated ensemble of state vectors after the EnKF step.
+                   Shape is the same as the input X.
     """
 
     # If using 'metric' only, just use metric and thresh every other iteration

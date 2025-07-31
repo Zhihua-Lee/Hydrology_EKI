@@ -508,7 +508,7 @@ def plot_event_statistics(assimilation_phase, visual_output_dir, out_dir, test_d
         print(f"  - Saved consolidated evolution plot for Station {station_name}")
 
 # ===================== Geographic Map Generation Function =====================
-def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, post_param_array=None, cr_ref_vec=None):
+def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, active_param_indices, param_labels, post_param_array=None, cr_ref_vec=None):
     """
     Generates and saves a map of Cr values or Cr error, with robust data handling and detailed annotations.
     """
@@ -517,14 +517,31 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, p
     maps_dir = os.path.join(visual_output_dir, assimilation_phase, "maps")
     clear_and_create_dir(maps_dir)
 
-    # --- ADDED: Calculate convergence metrics if full parameter history is provided ---
+    # --- Find the index for the '$Cr$' parameter ---
+    try:
+        cr_orig_idx = param_labels.index('$Cr$')
+    except ValueError:
+        print("Warning: '$Cr$' not found in `prm_names` from config. Skipping Cr map generation.")
+        return
+
+    if cr_orig_idx not in active_param_indices:
+        print("Warning: '$Cr$' is not an active parameter in this run. Skipping Cr map generation.")
+        return
+    
+    # This is the row index in the CSV file of active parameters
+    cr_active_idx = active_param_indices.index(cr_orig_idx)
+
+    # --- Calculate convergence metrics if full parameter history is provided ---
     convergence_metrics = {}
     if assimilation_phase == 'post' and post_param_array is not None and post_param_array.ndim == 4:
         print("  Calculating parameter convergence metrics...")
         # Shape: (iterations, params, divisions, particles)
         num_iterations, _, num_divisions, _ = post_param_array.shape
-        # Assuming we are analyzing the first parameter (index 0)
-        param_data = post_param_array[:, 0, :, :] # Shape: (iterations, divisions, particles)
+        # Use the dynamically found index for the Cr parameter
+        if cr_active_idx >= post_param_array.shape[1]:
+            print(f"Warning: cr_active_idx ({cr_active_idx}) is out of bounds for post_param_array. Skipping convergence metrics.")
+        else:
+            param_data = post_param_array[:, cr_active_idx, :, :] # Shape: (iterations, divisions, particles)
         
         for div_id in range(num_divisions):
             std_over_time = np.std(param_data[:, div_id, :], axis=1)
@@ -573,8 +590,12 @@ def generate_cr_map(assimilation_phase, visual_output_dir, out_dir, test_dict, p
         print(f"Warning: Final parameter mean file not found: {param_mean_file}. Skipping map generation.")
         return
 
-    cr_sparse_mean = pd.read_csv(param_mean_file, header=None).to_numpy().flatten()
-    cr_sparse_std = pd.read_csv(param_std_file, header=None).to_numpy().flatten() if os.path.exists(param_std_file) else np.full_like(cr_sparse_mean, np.nan)
+    cr_sparse_mean = pd.read_csv(param_mean_file, header=None).to_numpy()[cr_active_idx, :]
+    if os.path.exists(param_std_file):
+        cr_sparse_std = pd.read_csv(param_std_file, header=None).to_numpy()[cr_active_idx, :]
+    else:
+        cr_sparse_std = np.full_like(cr_sparse_mean, np.nan)
+
     
     model_link_ids = get_ids(test_dict)
     sparse_parent, link_to_division_map = get_subwatershed(test_dict, model_link_ids)
@@ -1090,7 +1111,15 @@ def main_visualization(test_dict):
     observed_data_clean = observed_data.copy()
     observed_data_clean[observed_data_clean == 0] = np.nan
 
-    param_labels, param_ranges, active_param_indices = ["$Cr$"], [[0.00, 2.5]], [0]
+    # Dynamically determine parameter labels, ranges, and active indices from config
+    param_labels = test_dict['prm_names']
+    prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
+    active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
+    
+    prm_lb = [float(lb) for lb in test_dict['prm_lb']]
+    prm_ub = [float(ub) for ub in test_dict['prm_ub']]
+    param_ranges = list(zip(prm_lb, prm_ub))
+
 
     # --- Post Assimilation ---
     post_param_list = []
@@ -1102,7 +1131,7 @@ def main_visualization(test_dict):
     iter_range_post = np.arange(0, num_assimilation_steps + 1)
 
     # --- Generate Maps (as they are independent of prior/post phase) ---
-    generate_cr_map('post', visual_output_dir, test_dict['out_dir'], test_dict, post_param_array, cr_ref_vec)
+    generate_cr_map('post', visual_output_dir, test_dict['out_dir'], test_dict, active_param_indices, param_labels, post_param_array, cr_ref_vec)
     generate_hydrograph_metric_map('post', visual_output_dir, test_dict['out_dir'], test_dict, observed_data_clean,
                                    plot_station_indices, plot_station_names, model_link_ids_temp, plot_link_ids)
     generate_rainfall_map(visual_output_dir, test_dict, model_link_ids_temp, link_to_division_map)

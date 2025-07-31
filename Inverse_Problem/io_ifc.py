@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from latent import transform_latent_sparse
+from latent import transform_latent_to_physical
 from typing import List, Tuple, Dict, Union
 from utils import time_to_epoch, get_ids, get_subwatershed # <-- Add get_ids and get_subwatershed
 
@@ -279,43 +279,75 @@ def create_gbl(test_dict: dict, ens: int) -> None:
             f.write(member_content)
 
 
-def create_prm(test_dict: dict, id_list: list, prm_array: np.ndarray, ens: int) -> None:
+def create_prm_from_division_params(
+    test_dict: dict, 
+    link_to_division_map: dict, 
+    physical_params_div: np.ndarray, 
+    member_id: int
+) -> None:
     """
-    Create PRM files based on the given test dictionary, ID list, and PRM array.
+    Creates a single PRM file for one ensemble member using division-level physical parameters.
+    This function reads a template, then updates parameters for each link by looking up
+    its division and applying the corresponding physical parameter.
 
     Args:
-        test_dict (dict): Test dictionary containing required parameters.
-        id_list (list): List of IDs.
-        prm_array (np.ndarray): Array of PRM values.
-        ens (int): Number of PRM files to create.
-
-    Returns:
-        None
+        test_dict (dict): Configuration dictionary.
+        link_to_division_map (dict): A dictionary mapping each link ID to its division index.
+        physical_params_div (np.ndarray): A 2D array of physical parameters at the division level.
+                                          Shape: (n_total_physical_params, n_divisions).
+                                          NaN indicates a parameter should not be updated.
+        member_id (int): The ID of the ensemble member, used for the filename.
     """
+    # 1. Read the template PRM file to get the base parameter structure
+    prm_template_path = test_dict['prm']
+    with open(prm_template_path, 'r') as f:
+        prm_lines = [line for line in f.readlines() if line.strip()]
     
-    # Format is:
-    # Total number of IDs
-    # ID 1
-    # Parameters
-    # ID 2
-    # ...
+    template_id_list = [int(i.strip('\n')) for i in prm_lines[1::2]]
+    prm_list_template = np.array([[float(i) for i in line.strip('\n').split()] for line in prm_lines[2::2]])
     
-    # Initialize empty list of size total number of rows
-    id_num = len(id_list)
-    prm_list = [[] for _ in range(2 * id_num + 1)]
+    # Create a dictionary for quick lookup of template parameters for any link ID
+    template_params_dict = {link_id: params for link_id, params in zip(template_id_list, prm_list_template)}
 
-    
+    # 2. Open the output file
     tmp_dir = test_dict["tmp_dir"]
-    prm_num = prm_array.shape[1]
-    prm_list[0] = str(id_num)
-    for i in range(ens):
-        prm_name = tmp_dir + str(i) + ".prm"
-        with open(prm_name, 'w') as f:
-            for j in range(id_num):
-                prm_list[1 + 2 * j] = str(id_list[j])
-                prm_list[2 + 2 * j] = " ".join([str(item) for item in prm_array[:, j, i]])
-            for item in prm_list:
-                f.write("%s\n" % item)
+    prm_name = os.path.join(tmp_dir, f"{member_id}.prm")
+    
+    # The authoritative list of link IDs is now derived directly from the map
+    sorted_link_ids = sorted(link_to_division_map.keys())
+    n_links = len(sorted_link_ids)
+
+    with open(prm_name, 'w') as f:
+        # Write the header (total number of links)
+        f.write(f"{n_links}\n")
+
+        # 3. Iterate through each link required by the model
+        for link_id in sorted_link_ids:
+            # Start with the default parameters from the template
+            final_params = template_params_dict.get(link_id, [0.0] * physical_params_div.shape[0]).copy()
+            
+            # Find the division this link belongs to
+            division_id = link_to_division_map.get(link_id)
+            
+            if division_id is not None:
+                # For each parameter type, check if it needs to be updated
+                for param_idx in range(physical_params_div.shape[0]):
+                    # Get the updated value for this parameter type and division
+                    updated_val = physical_params_div[param_idx, division_id]
+                    
+                    # If the value is not NaN, it means it was updated by the EKI step
+                    if not np.isnan(updated_val):
+                        final_params[param_idx] = updated_val
+            
+            # Round all parameters to the required precision before writing
+            rounded_params = [
+                np.format_float_positional(p, precision=5, unique=False, fractional=False, trim='k')
+                for p in final_params
+            ]
+
+            # Write the link ID and its final parameters to the file
+            f.write(f"{link_id}\n")
+            f.write(" ".join(map(str, rounded_params)) + "\n")
 
 # def create_meas_sav(test_dict: dict, id_list: list) -> None:
 #     """
@@ -570,7 +602,6 @@ def create_presim_prm_from_template(template_prm_path: str, output_prm_path: str
         
     print(f"Finished creating {output_prm_path}.")
 
-
 def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: str, output_csv_path: str) -> None:
     """
     Creates the .gbl file for the presimulation run.
@@ -696,7 +727,6 @@ def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: st
     
     with open(presim_gbl_path, "w") as f:
         f.write(member_content)
-
 
 def create_presim_job_file(test_dict: dict, presim_dir: str, presim_gbl_path: str) -> str:
     """
@@ -848,90 +878,88 @@ def create_test_initial_condition(test_dict: dict, id_list: list) -> None:
 #         #     temp_item = ' '.join(item_2.split()[:-1])
 #         #     f.write("%s\n" % temp_item)
 
-def save_statistics_csv(test_dict, sparse_parent, Y_mean, Y_std=None, X_mat=None, name="results"):
+def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_mean: np.ndarray, Y_std: np.ndarray = None, X_mat: np.ndarray = None, name: str = "results") -> None:
     """
-    Save statistical results to CSV files.
+    Save statistical results (mean, std) of model outputs (Y) and parameters (X) to CSV files.
 
     Args:
-        test_dict (dict): Test dictionary containing required parameters.
-        sparse_parent (dict): Sparse parent information.
-        Y_mean (np.ndarray): Mean results to be saved to a CSV file.
-        Y_std (np.ndarray, optional): Standard deviation results to be saved to a CSV file.
-        X_mat (np.ndarray, optional): Parameter data to compute mean and standard deviation.
-        name (str, optional): Prefix for the output CSV file names.
-
-    Returns:
-        None
+        test_dict (dict): The main configuration dictionary.
+        division_to_link_map (np.ndarray): A sparse matrix mapping divisions to links, used for parameter transformation.
+                                           Shape: (n_divisions, n_links).
+        Y_mean (np.ndarray): The mean of the model output ensemble. Shape: (t_steps, n_links).
+        Y_std (np.ndarray, optional): The standard deviation of the model output ensemble. Shape: (t_steps, n_links).
+        X_mat (np.ndarray, optional): The latent parameter ensemble. Shape: (n_latent_params, n_divisions, n_ens).
+        name (str, optional): A prefix for the output filenames (e.g., '0_prior').
     """
-    # Get necessary parameters
     out_dir = test_dict["out_dir"]
     tmp_dir = test_dict["tmp_dir"]
-    sav_name = tmp_dir + "meas.sav" 
+    sav_name = os.path.join(tmp_dir, "meas.sav")
 
-    # Load data from SAV file (gauges)
     sav_val = np.genfromtxt(sav_name, delimiter=',', ndmin=1)
-    sav_num = len(sav_val)
-    title_y = sav_val.reshape(1, sav_num)
+    title_y = sav_val.reshape(1, -1)
 
-    # Save mean results to CSV
     Y_mean_out_content = np.concatenate((title_y, Y_mean), axis=0)
-    out_name_mean = out_dir + str(name) + "_mean.csv"
+    out_name_mean = os.path.join(out_dir, f"{name}_mean.csv")
     np.savetxt(out_name_mean, Y_mean_out_content, delimiter=",", fmt="%.5e")
 
-    # Save standard deviation results to CSV if provided
     if Y_std is not None:
         Y_std_out_content = np.concatenate((title_y, Y_std), axis=0)
-        out_name_std = out_dir + str(name) + "_std.csv"
+        out_name_std = os.path.join(out_dir, f"{name}_std.csv")
         np.savetxt(out_name_std, Y_std_out_content, delimiter=",", fmt="%.5e")
 
-    # Save parameter mean and standard deviation to CSV if X_mat is provided
     if X_mat is not None:
-        X_sparse = transform_latent_sparse(test_dict, sparse_parent, X_mat)
-        X_mean = np.mean(X_sparse, axis=1, keepdims=True)
-        X_std = np.std(X_sparse, axis=1, keepdims=True)
+        # Transform latent parameters to their physical representation for analysis.
+        # FIX: Only save the *active* parameters to maintain compatibility with visualize.py
+        # and to produce compact, NaN-free CSV files, just like the old version did.
+        prm_dist_bool = [val.lower() == 'true' for val in test_dict["prm_dist"]]
+        active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
 
-        X_name_mean = out_dir + str(name) + "_params_mean.csv"
-        np.savetxt(X_name_mean, X_mean, delimiter=",", fmt="%.5e")
+        n_divisions = division_to_link_map.shape[0]
+        X_physical = transform_latent_to_physical(test_dict, X_mat, n_divisions)
 
-        X_name_std = out_dir + str(name) + "_params_std.csv"
+        # Select only the active parameter rows before calculating statistics.
+        X_physical_active = X_physical[active_param_indices, :, :]
+        X_mean = np.mean(X_physical_active, axis=2) # axis=2 is the ensemble dimension
+        X_std = np.std(X_physical_active, axis=2)
+
+        X_name_mean = os.path.join(out_dir, f"{name}_params_mean.csv")
+        np.savetxt(X_name_mean, X_mean, delimiter=",", fmt="%.5e") # This will save a 2D array (params, divisions)
+
+        X_name_std = os.path.join(out_dir, f"{name}_params_std.csv")
         np.savetxt(X_name_std, X_std, delimiter=",", fmt="%.5e")
 
-def save_particles(test_dict, sparse_parent, X_particle, Y_particle, name="results"):
+def save_particles(test_dict: dict, division_to_link_map: np.ndarray, X_particle: np.ndarray, Y_particle: np.ndarray, name: str = "results") -> None:
     """
-    Save particle data to NPY files.
+    Save the entire ensemble of parameters (X) and model outputs (Y) to .npy files.
 
     Args:
-        test_dict (dict): Test dictionary containing required parameters.
-        sparse_parent (dict): Sparse parent information.
-        X_particle (np.ndarray): Particle data to be saved to a NPY file.
-        Y_particle (np.ndarray): Particle results to be saved to a NPY file.
-        name (str, optional): Prefix for the output NPY file names.
-
-    Returns:
-        None
+        test_dict (dict): The main configuration dictionary.
+        division_to_link_map (np.ndarray): A sparse matrix mapping divisions to links, used for parameter transformation.
+                                           Shape: (n_divisions, n_links).
+        X_particle (np.ndarray): The latent parameter ensemble. Shape: (n_latent_params, n_divisions, n_ens).
+        Y_particle (np.ndarray): The model output ensemble. Shape: (n_ens, t_steps, n_links).
+        name (str, optional): A prefix for the output filenames (e.g., '0_prior').
     """
-    # Get necessary parameters
     out_dir = test_dict["out_dir"]
-    tmp_dir = test_dict["tmp_dir"]
-    sav_name = tmp_dir + "meas.sav" 
 
-    # Load data from SAV file
-    sav_val = np.genfromtxt(sav_name, delimiter=',', ndmin=1)
-    sav_num = len(sav_val)
-    title_y = sav_val.reshape(1, sav_num)
+    # Transform latent parameters to their physical representation before saving.
+    # FIX: Only save the *active* parameters to NPY to maintain consistency with CSVs
+    # and the expectations of visualize.py.
+    prm_dist_bool = [val.lower() == 'true' for val in test_dict["prm_dist"]]
+    active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
 
-    # Transform particle latent parameters
-    X_sparse = transform_latent_sparse(test_dict, sparse_parent, X_particle)
+    n_divisions = division_to_link_map.shape[0]
+    X_physical_full = transform_latent_to_physical(test_dict, X_particle, n_divisions)
+    X_physical_active = X_physical_full[active_param_indices, :, :]
 
-    # Save particle data to NPY files
-    X_particle_name = out_dir + str(name) + '_params_particles.npy'
-    Y_particle_name = out_dir + str(name) + '_particles.npy'
+    X_particle_name = os.path.join(out_dir, f"{name}_params_particles.npy")
+    Y_particle_name = os.path.join(out_dir, f"{name}_particles.npy")
     
     with open(Y_particle_name, 'wb') as f:
         np.save(f, Y_particle)
         
     with open(X_particle_name, 'wb') as f:
-        np.save(f, X_sparse)
+        np.save(f, X_physical_active)
 
 def create_batch_job_file(test_dict, tmp_dir: str) -> None:
     """

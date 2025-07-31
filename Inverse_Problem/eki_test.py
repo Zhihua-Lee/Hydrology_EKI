@@ -7,10 +7,10 @@ import argparse
 
 from tqdm import tqdm
 from utils import process_yaml, get_ids, get_subwatershed, load_and_process_observations
-from io_ifc import create_meas_sav, create_test_initial_condition, create_prm, create_gbl, create_batch_job_file, save_statistics_csv, save_particles, update_prm_by_division #update_prm_add_or_overwrite_cr
+from io_ifc import create_meas_sav, create_test_initial_condition, create_prm_from_division_params, create_gbl, create_batch_job_file, save_statistics_csv, save_particles, update_prm_by_division #update_prm_add_or_overwrite_cr
 from eki import subsample_data, pert, EnKF_step
-from latent import create_latent, transform_latent
-from run import run_test, generate_synthetic_data
+from latent import create_latent, transform_latent_to_physical
+from run import run_test, generate_synthetic_data, generate_prm_files_for_ensemble
 from ifc_usgs_fileorder import load_usgs_mapping
 
 import pandas as pd
@@ -58,10 +58,12 @@ def main(yaml_name, visualize_only=False):
             # Its shape must be (n_divisions, n_links), which is (1, n_links).
             n_links = len(sorted_link_ids)
             division_to_link_map = np.ones((1, n_links)) # (n_divisions, n_links)
+            link_to_division_map = {link_id: 0 for link_id in sorted_link_ids}
+
         else:
             print(f"Loading watershed divisions from: {test_dict['watershed_csv']}")
             # Pass sorted_link_ids to ensure consistency.
-            division_to_link_map, _ = get_subwatershed(test_dict, sorted_link_ids) # (n_divisions, n_links)
+            division_to_link_map, link_to_division_map = get_subwatershed(test_dict, sorted_link_ids) # (n_divisions, n_links)
         # ANNOTATION: The 'division_to_link_map' matrix is a transformation operator that maps parameters
         # defined at the watershed division level to the individual link level.
         # - Shape: (number_of_divisions, number_of_links)
@@ -114,23 +116,31 @@ def main(yaml_name, visualize_only=False):
         R = (rel_meas_std * y.reshape(-1))**2 + abs_meas_std**2  # (n_gauges * t_steps,)
 
         # --- 5. EKI Main Loop ---
-        print("\n" + "="*60 + "\n" + "🚀  STARTING EKI PROCESS" +"\n"+ "="*60 + "\n")
+        print("\n" + "="*60 + "\n" + "🚀  STARTING EKI PROCESS" + "\n" + "="*60 + "\n")
+
         for i in tqdm(range(step_num)):
             # --- Prior Step ---
-            # Perturb posterior, transform, create prm file, and run model.
-            X_prior = pert(X_post, test_dict, division_to_link_map)             # (n_latent_params, n_divisions, n_ens)
-            prm_ens_prior = transform_latent(test_dict, division_to_link_map, X_prior)              # (n_physical_params, n_links, n_ens)
-            create_prm(test_dict, sorted_link_ids, prm_ens_prior, ens)
-            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)     # (n_gauges * t_steps, n_ens)    
+            X_prior = pert(X_post, test_dict, division_to_link_map)
+            generate_prm_files_for_ensemble(
+                test_dict, X_prior, ens, division_to_link_map.shape[0], link_to_division_map
+            )
+            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_prior, name='csv/' + str(i) + "_prior")
             
             # --- Posterior Step (Assimilation) ---
-            # Update parameters with observations, rerun model to see improvement, and save results.
-            X_post = EnKF_step(y, X_prior, Y_prior, R, test_dict, i)            
-            prm_ens_post = transform_latent(test_dict, division_to_link_map, X_post)
-            create_prm(test_dict, sorted_link_ids, prm_ens_post, ens)
-            Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_test(ens, X_post, tmp_dir, col_idx_in_sav) 
+            # Reshape the 3D parameter array to 2D for the EnKF step
+            n_params, n_div, n_ens_members = X_prior.shape
+            X_prior_flat = X_prior.reshape(n_params * n_div, n_ens_members)
+            # Run the assimilation step
+            X_post_flat = EnKF_step(y, X_prior_flat, Y_prior, R, test_dict, i)
+            # Reshape the updated 2D parameters back to 3D for the next iteration
+            X_post = X_post_flat.reshape(n_params, n_div, n_ens_members)
+            # Generate PRM files for the updated ensemble
+            generate_prm_files_for_ensemble(
+                test_dict, X_post, ens, division_to_link_map.shape[0], link_to_division_map
+            )
+            Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_test(ens, X_post, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_post, Y_plot_post, name='npy/' + str(i) + '_post')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_post, name='csv/' + str(i) + "_post")
     else:
