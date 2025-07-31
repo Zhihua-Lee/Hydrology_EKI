@@ -15,6 +15,10 @@ from ifc_usgs_fileorder import load_usgs_mapping
 import struct
 import re # Import regex module for year matching
 
+# ==============================================================================
+# Utility Functions
+# ==============================================================================
+
 def get_rainfall_for_lid_from_config(target_lid, start_time_str, end_time_str, rain_dir):
     """
     Parses binary rainfall files to get data for a target LID within a time window.
@@ -146,6 +150,10 @@ def get_rainfall_for_lid_from_config(target_lid, start_time_str, end_time_str, r
 
     return rainfall_df
 
+# ==============================================================================
+# Input File Generation
+# ==============================================================================
+
 def _create_single_gbl(test_dict: dict, output_gbl_path: str, prm_file_path: str, ini_file_path: str, csv_file_path: str, sav_file_path: str, scratch_dir_path: str):
     """
     A private worker function to create a single GBL file from a template.
@@ -273,6 +281,20 @@ def _create_single_gbl(test_dict: dict, output_gbl_path: str, prm_file_path: str
     with open(output_gbl_path, "w") as f:
         f.write(member_content)
 
+def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: str, output_csv_path: str) -> None:
+    """
+    Creates the .gbl file for the presimulation run.
+    """
+    _create_single_gbl(
+        test_dict=test_dict,
+        output_gbl_path=presim_gbl_path,
+        prm_file_path=presim_prm_path,
+        ini_file_path=test_dict['initial_uini'],
+        csv_file_path=output_csv_path,
+        sav_file_path=test_dict['link_sav'],
+        scratch_dir_path=test_dict['scratch_dir']
+    )
+
 def create_ensemble_gbl(test_dict: dict, ens: int) -> None:
     """
     Creates a .gbl file for each member of the EKI ensemble.
@@ -355,19 +377,6 @@ def create_prm_from_division_params(
             f.write(f"{link_id}\n")
             f.write(" ".join(map(str, rounded_params)) + "\n")
 
-def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: str, output_csv_path: str) -> None:
-    """
-    Creates the .gbl file for the presimulation run.
-    """
-    _create_single_gbl(
-        test_dict=test_dict,
-        output_gbl_path=presim_gbl_path,
-        prm_file_path=presim_prm_path,
-        ini_file_path=test_dict['initial_uini'],
-        csv_file_path=output_csv_path,
-        sav_file_path=test_dict['link_sav'],
-        scratch_dir_path=test_dict['scratch_dir']
-    )
 
 def create_presim_job_file(test_dict: dict, presim_dir: str, presim_gbl_path: str) -> str:
     """
@@ -415,6 +424,73 @@ def create_presim_job_file(test_dict: dict, presim_dir: str, presim_gbl_path: st
         f.write(f'rm -r {test_dict["scratch_dir"]}\n')
         
     return job_file_path
+
+def create_prm_generation_job_file(test_dict: dict, ens: int) -> str:
+    """
+    Creates the HPC batch job script for generating .prm files in parallel.
+    """
+    tmp_dir = test_dict['tmp_dir']
+    job_file_path = os.path.join(tmp_dir, 'submit_prm_job.job')
+    worker_script_path = os.path.join(test_dict['project_root'], 'Inverse_Problem', 'generate_prm_worker.py')
+
+    with open(job_file_path, 'w') as f:
+        f.write('#!/bin/bash\n')
+        f.write('#$ -N prm_generation\n')
+        f.write('#$ -j y\n')
+        f.write('#$ -cwd\n')
+        f.write(f'#$ -t 1-{ens}\n')
+        f.write('#$ -l mf=2G\n') # Request modest memory for this simple task
+        f.write('#$ -q IFC\n')
+        f.write('#$ -o /dev/null\n')
+        f.write('#$ -e /dev/null\n')
+        f.write('\n')
+        f.write('module reset\n')
+        f.write('\n')
+        python_executable = test_dict['hpc_python_path']
+        f.write(f'{python_executable} {worker_script_path} {tmp_dir}\n')
+    return job_file_path
+
+def create_eki_run_job_file(test_dict, tmp_dir: str) -> None:
+    """
+    Create a batch job file for running EKI simulations.
+
+    Args:
+        tmp_dir (str): Temporary directory where the batch job file will be created.
+
+    Returns:
+        None
+    """
+    parallel_argument = test_dict['parallel_argument']
+    num_parallel_slots = test_dict['num_parallel_slots']
+    scratch_dir = test_dict['scratch_dir']
+    
+    with open(tmp_dir + 'submit_job.job', 'w') as f:
+        f.write('#!/bin/bash\n')
+        f.write('#$ -N EKI_job\n')
+        # f.write('#$ -pe orte 2\n') # 每个数组作业任务都会获得 2 个 slot，而不是整个数组任务共用 2 个 slot。
+        f.write(f'#$ -pe {parallel_argument} {num_parallel_slots}\n')
+        # f.write('#$ -pe smp {num_parallel_slots}\n')
+        # f.write('#$ -q AMCS\n')
+        f.write('#$ -q IFC\n')
+        f.write('#$ -cwd\n')
+        f.write('#$ -o /dev/null\n')
+        f.write('#$ -e /dev/null\n')
+        f.write('\n')
+        f.write('/bin/echo Running on host: `hostname`.\n')
+        f.write('/bin/echo In directory: `pwd`\n')
+        f.write('/bin/echo Starting on: `date`\n')
+        f.write('\n')
+        f.write('module reset\n')
+        f.write('module load openmpi\n')
+        f.write('\n')
+        f.write('ensemble_id=$(($SGE_TASK_ID - 1))\n')
+        f.write(f'scratch_path="{scratch_dir}/$ensemble_id"\n')
+        f.write('mkdir -p "$scratch_path"\n')
+        project_root = test_dict['project_root']
+        executable_path = os.path.join(project_root, 'exec/asynch/bin/asynch')
+        f.write(f'mpirun -np {num_parallel_slots} {executable_path} ' + tmp_dir + '$ensemble_id.gbl\n')
+        f.write('rm -r "$scratch_path"\n')
+        # hpchome/executables/asynch/bin/asynch
 
 def create_meas_sav(test_dict: dict, model_link_ids: list) -> None:
     """
@@ -549,6 +625,10 @@ def create_test_initial_condition(test_dict: dict, id_list: list) -> None:
 #         #     temp_item = ' '.join(item_2.split()[:-1])
 #         #     f.write("%s\n" % temp_item)
 
+# ==============================================================================
+# Output Data Saving
+# ==============================================================================
+
 def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_mean: np.ndarray, Y_std: np.ndarray = None, X_mat: np.ndarray = None, name: str = "results") -> None:
     """
     Save statistical results (mean, std) of model outputs (Y) and parameters (X) to CSV files.
@@ -622,45 +702,3 @@ def save_particles(test_dict: dict, division_to_link_map: np.ndarray, X_particle
         
     with open(X_particle_name, 'wb') as f:
         np.save(f, X_physical_active)
-
-def create_batch_job_file(test_dict, tmp_dir: str) -> None:
-    """
-    Create a batch job file for running EKI simulations.
-
-    Args:
-        tmp_dir (str): Temporary directory where the batch job file will be created.
-
-    Returns:
-        None
-    """
-    parallel_argument = test_dict['parallel_argument']
-    num_parallel_slots = test_dict['num_parallel_slots']
-    scratch_dir = test_dict['scratch_dir']
-    
-    with open(tmp_dir + 'submit_job.job', 'w') as f:
-        f.write('#!/bin/bash\n')
-        f.write('#$ -N EKI_job\n')
-        # f.write('#$ -pe orte 2\n') # 每个数组作业任务都会获得 2 个 slot，而不是整个数组任务共用 2 个 slot。
-        f.write(f'#$ -pe {parallel_argument} {num_parallel_slots}\n')
-        # f.write('#$ -pe smp {num_parallel_slots}\n')
-        # f.write('#$ -q AMCS\n')
-        f.write('#$ -q IFC\n')
-        f.write('#$ -cwd\n')
-        f.write('#$ -o /dev/null\n')
-        f.write('#$ -e /dev/null\n')
-        f.write('\n')
-        f.write('/bin/echo Running on host: `hostname`.\n')
-        f.write('/bin/echo In directory: `pwd`\n')
-        f.write('/bin/echo Starting on: `date`\n')
-        f.write('\n')
-        f.write('module reset\n')
-        f.write('module load openmpi\n')
-        f.write('\n')
-        f.write('ensemble_id=$(($SGE_TASK_ID - 1))\n')
-        f.write(f'scratch_path="{scratch_dir}/$ensemble_id"\n')
-        f.write('mkdir -p "$scratch_path"\n')
-        project_root = test_dict['project_root']
-        executable_path = os.path.join(project_root, 'exec/asynch/bin/asynch')
-        f.write(f'mpirun -np {num_parallel_slots} {executable_path} ' + tmp_dir + '$ensemble_id.gbl\n')
-        f.write('rm -r "$scratch_path"\n')
-        # hpchome/executables/asynch/bin/asynch

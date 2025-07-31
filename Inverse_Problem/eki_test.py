@@ -7,10 +7,10 @@ import argparse
 
 from tqdm import tqdm
 from utils import process_yaml, get_ids, get_subwatershed, load_and_process_observations
-from io_ifc import create_meas_sav, create_test_initial_condition, create_prm_from_division_params, create_ensemble_gbl, create_batch_job_file, save_statistics_csv, save_particles
-from eki import subsample_data, pert, EnKF_step
+from io_ifc import create_meas_sav, create_test_initial_condition, create_ensemble_gbl, create_eki_run_job_file, save_statistics_csv, save_particles
+from eki import subsample_data, perturb_ensemble, EnKF_step
 from latent import create_latent, transform_latent_to_physical
-from run import run_test, generate_synthetic_data, generate_prm_files_for_ensemble
+from hpc_tasks import run_hpc_presimulation_for_synthetic_data, run_hpc_prm_generation_ensemble, run_hpc_simulation_ensemble
 from ifc_usgs_fileorder import load_usgs_mapping
 
 import pandas as pd
@@ -76,7 +76,7 @@ def main(yaml_name, visualize_only=False):
         create_meas_sav(test_dict, sorted_link_ids)       # Sensor location file.
         create_test_initial_condition(test_dict, sorted_link_ids) # Initial conditions file.
         create_ensemble_gbl(test_dict, ens)               # Global configuration files for all ensemble members.
-        create_batch_job_file(test_dict, tmp_dir)         # Job submission script.
+        create_eki_run_job_file(test_dict, tmp_dir)         # Job submission script for the main EKI simulation runs.
 
         # --- 4. EKI Core Variable Preparation ---
         print("\n--- Preparing EKI Core Variables (X, y, R) ---")
@@ -94,7 +94,7 @@ def main(yaml_name, visualize_only=False):
         print(f"Using simulated data: {using_simulated_data}")
         print(f"Measurement data path: {test_dict['meas_series']}")
         if using_simulated_data:
-            generate_synthetic_data(test_dict)
+            run_hpc_presimulation_for_synthetic_data(test_dict)
         else:
             print("Using real observation data. Skipping pre-simulation step.")
         
@@ -120,11 +120,13 @@ def main(yaml_name, visualize_only=False):
 
         for i in tqdm(range(step_num)):
             # --- Prior Step ---
-            X_prior = pert(X_post, test_dict, division_to_link_map)
-            generate_prm_files_for_ensemble(
+            X_prior = perturb_ensemble(X_post, test_dict, division_to_link_map)
+            
+            # Prepare files and then run the simulation ensemble on HPC
+            run_hpc_prm_generation_ensemble(
                 test_dict, X_prior, ens, division_to_link_map.shape[0], link_to_division_map
             )
-            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_test(ens, X_prior, tmp_dir, col_idx_in_sav)
+            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std, _, _  = run_hpc_simulation_ensemble(ens, X_prior, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_prior, name='csv/' + str(i) + "_prior")
             
@@ -137,10 +139,10 @@ def main(yaml_name, visualize_only=False):
             # Reshape the updated 2D parameters back to 3D for the next iteration
             X_post = X_post_flat.reshape(n_params, n_div, n_ens_members)
             # Generate PRM files for the updated ensemble
-            generate_prm_files_for_ensemble(
+            run_hpc_prm_generation_ensemble(
                 test_dict, X_post, ens, division_to_link_map.shape[0], link_to_division_map
             )
-            Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_test(ens, X_post, tmp_dir, col_idx_in_sav)
+            Y_post, Y_plot_post, Y_plot_mean, Y_plot_std, _, _ = run_hpc_simulation_ensemble(ens, X_post, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_post, Y_plot_post, name='npy/' + str(i) + '_post')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_post, name='csv/' + str(i) + "_post")
     else:

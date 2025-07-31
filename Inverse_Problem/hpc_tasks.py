@@ -2,10 +2,12 @@ import os, sys
 import numpy as np
 import time
 import pickle
-from typing import List, Tuple, Dict, Union
-from io_ifc import create_presim_gbl, create_presim_job_file, create_prm_from_division_params
+from typing import List, Tuple, Dict
+
+# Import dependencies for the HPC task functions
 from utils import get_ids, get_subwatershed
-from latent import transform_latent_to_physical
+from io_ifc import create_presim_gbl, create_presim_job_file, create_prm_from_division_params, create_prm_generation_job_file
+
 
 def _wait_for_files(file_paths: List[str], timeout: int = 1800, check_for_errors: bool = False, tmp_dir: str = None) -> List[np.ndarray]:
     """
@@ -74,13 +76,13 @@ def _wait_for_files(file_paths: List[str], timeout: int = 1800, check_for_errors
             print(f"\n✅ All {num_files} files are ready after {elapsed} seconds.")
             return read_values
 
-def generate_synthetic_data(test_dict: Dict) -> None:
+def run_hpc_presimulation_for_synthetic_data(test_dict: Dict) -> None:
     """
-    Generates synthetic hydrograph data to be used as the 'true' observation.
-    This involves running a pre-simulation with known reference parameters by dynamically
-    creating all necessary configuration and job files.
+    Submits a single HPC job to run a pre-simulation with reference parameters.
+    This is used to generate the synthetic observation data for the EKI experiment.
+    It creates all necessary files, submits the job, and waits for the output.
     """
-    print("\n--- Starting Pre-Simulation for Synthetic Data Generation ---")
+    print("\n--- Starting HPC Task: Pre-Simulation for Synthetic Data Generation ---")
 
     presim_dir = os.path.join(os.path.dirname(test_dict['meas_series']), 'presim_run')
     os.makedirs(presim_dir, exist_ok=True)
@@ -104,19 +106,13 @@ def generate_synthetic_data(test_dict: Dict) -> None:
     else:
         raise TypeError("Cr_ref must be a number or a list.")
 
-    # Find the original index of the '$Cr$' parameter.
     try:
         prm_names = test_dict['prm_names']
         cr_param_index = prm_names.index('$Cr$')
     except (ValueError, KeyError):
-        raise ValueError("'$Cr$' must be present in 'prm_names' in the config for simulated data experiments.")
+        raise ValueError("'$Cr$' must be present in 'prm_names' for simulated data experiments.")
 
-    # Prepare the arguments for the unified PRM creation function.
-    # The physical parameters array should only contain the active parameters.
-    # Here, only Cr is active. Shape must be (n_active_params, n_divisions).
     physical_params_div_active = cr_ref_vec.reshape(1, num_divisions)
-    
-    # The indices list tells the function where to place the active parameters in the full prm file.
     active_param_indices = [cr_param_index]
 
     presim_prm_path = os.path.join(presim_dir, "presim.prm")
@@ -135,11 +131,11 @@ def generate_synthetic_data(test_dict: Dict) -> None:
         os.remove(output_csv)
         
     job_cmd = f"qsub {job_file_path}"
-    print(f"Submitting simulation job: {job_cmd}")
+    print(f"Submitting pre-simulation job: {job_cmd}")
     os.system(job_cmd)
     
     try:
-        _wait_for_files([output_csv])
+        _wait_for_files([output_csv], timeout=1800)
         with open(output_csv, 'r') as f:
             lines = f.readlines()
         if len(lines) > 2:
@@ -151,9 +147,51 @@ def generate_synthetic_data(test_dict: Dict) -> None:
         print(f"\n❌ {e}")
         sys.exit(1)
 
-def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tuple[np.ndarray]:
+def run_hpc_prm_generation_ensemble(test_dict: dict, X_ensemble: np.ndarray, ens: int, n_divisions: int, link_to_division_map: dict) -> None:
     """
-    Run the test (ODE simulation) with a given ensemble size, latent parameter ensemble,
+    Submits an HPC job array to generate all .prm files for a given ensemble.
+    It serializes shared data, submits the job, and waits for all files to be created.
+    """
+    tmp_dir = test_dict['tmp_dir']
+    print(f"\n--- Starting HPC Task: Distributing {ens} .prm file generation tasks ---")
+    
+    for k in range(ens):
+        prm_file_path = os.path.join(tmp_dir, f"{k}.prm")
+        error_file_path = os.path.join(tmp_dir, f"{k}.prm.error")
+        if os.path.exists(prm_file_path): os.remove(prm_file_path)
+        if os.path.exists(error_file_path): os.remove(error_file_path)
+
+    prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
+    active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
+
+    shared_data = {
+        'test_dict': test_dict, 'link_to_division_map': link_to_division_map,
+        'n_divisions': n_divisions, 'active_param_indices': active_param_indices
+    }
+    with open(os.path.join(tmp_dir, 'prm_job_data.pkl'), 'wb') as f:
+        pickle.dump(shared_data, f)
+    np.save(os.path.join(tmp_dir, 'X_ensemble.npy'), X_ensemble)
+
+    job_file_path = create_prm_generation_job_file(test_dict, ens)
+    job_cmd = f"qsub {job_file_path}"
+    os.system(job_cmd)
+
+    prm_files_to_check = [os.path.join(tmp_dir, f"{k}.prm") for k in range(ens)]
+    try:
+        _wait_for_files(prm_files_to_check, timeout=600, check_for_errors=True, tmp_dir=tmp_dir)
+    except (TimeoutError, RuntimeError) as e:
+        print(f"\n❌ Failed to generate all .prm files: {e}")
+        sys.exit(1)
+
+    os.remove(os.path.join(tmp_dir, 'prm_job_data.pkl'))
+    os.remove(os.path.join(tmp_dir, 'X_ensemble.npy'))
+    os.remove(job_file_path)
+    print("Finished generating .prm files.")
+
+def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tuple[np.ndarray]:
+    """
+    Submits an HPC job array to run the IFC model simulation for an entire ensemble.
+    It waits for all simulation outputs (.csv) and then processes them.
     temporary directory, and measurement indices.
     """
     job_cmd = f"qsub -t 1-{ens} {os.path.join(tmp_dir, 'submit_job.job')}"
@@ -161,7 +199,7 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
     
     csv_paths = [os.path.join(tmp_dir, f"{j}.csv") for j in range(ens)]
     try:
-        read_values = _wait_for_files(csv_paths)
+        read_values = _wait_for_files(csv_paths, timeout=1800)
     except (TimeoutError, RuntimeError) as e:
         print(f"\n❌ {e}")
         sys.exit(1)
@@ -182,108 +220,3 @@ def run_test(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tup
             os.remove(csv_path)
     
     return Y, Y_plot, Y_plot_mean, Y_plot_std, X_plot_mean, X_plot_std
-
-def _create_prm_generation_job_file(test_dict: dict, ens: int) -> str:
-    """
-    Creates the HPC batch job script for generating .prm files in parallel.
-    """
-    tmp_dir = test_dict['tmp_dir']
-    job_file_path = os.path.join(tmp_dir, 'submit_prm_job.job')
-    worker_script_path = os.path.join(test_dict['project_root'], 'Inverse_Problem', 'generate_prm_worker.py')
-
-    with open(job_file_path, 'w') as f:
-        f.write('#!/bin/bash\n')
-        f.write('#$ -N prm_generation\n')
-        f.write('#$ -j y\n')
-        f.write('#$ -cwd\n')
-        f.write(f'#$ -t 1-{ens}\n')
-        f.write('#$ -l mf=2G\n') # Request modest memory for this simple task
-        f.write('#$ -q IFC\n')
-        # f.write(f'#$ -o {tmp_dir}$TASK_ID.out\n')
-        # f.write(f'#$ -e {tmp_dir}$TASK_ID.err\n')
-        f.write('#$ -o /dev/null\n')
-        f.write('#$ -e /dev/null\n')
-        f.write('\n')
-        f.write('module reset\n')
-        # f.write('module load python\n') # Ensure python environment is loaded
-        f.write('\n')
-        # Pass the temporary directory as an argument to the worker script
-        python_executable = test_dict['hpc_python_path']
-        f.write(f'{python_executable} {worker_script_path} {tmp_dir}\n')
-    return job_file_path
-
-def generate_prm_files_for_ensemble(
-    test_dict: dict,
-    X_ensemble: np.ndarray,
-    ens: int,
-    n_divisions: int,
-    link_to_division_map: dict
-) -> None:
-    """
-    Generates all .prm files for a given ensemble by submitting an HPC job array.
-    
-    This function first cleans up any old .prm files from the temporary directory
-    to prevent race conditions where the file-waiting logic sees old files and
-    returns prematurely. It then serializes shared data, submits a job array
-    to the HPC scheduler, and waits for all new .prm files to be created.
-
-    Args:
-        X_ensemble (np.ndarray): The complete latent parameter ensemble.
-                                 Shape: (n_active_params, n_divisions, n_ens).
-    """
-    tmp_dir = test_dict['tmp_dir']
-    print(f"Distributing {ens} .prm file generation tasks to HPC cluster...")
-    
-    # 1. Pre-cleanup Step to prevent race conditions.
-    # Safely remove any old .prm or .prm.error files from a previous iteration
-    # to ensure the _wait_for_files logic must wait for new file creation.
-    print("Cleaning up old .prm files before generation...")
-    for k in range(ens):
-        prm_file_path = os.path.join(tmp_dir, f"{k}.prm")
-        error_file_path = os.path.join(tmp_dir, f"{k}.prm.error")
-        try:
-            os.remove(prm_file_path)
-        except FileNotFoundError:
-            pass  # File didn't exist, which is fine.
-        try:
-            os.remove(error_file_path)
-        except FileNotFoundError:
-            pass # Error file didn't exist, which is fine.
-
-    # 2. Serialize shared data for worker processes
-    prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
-    active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
-
-    shared_data = {
-        'test_dict': test_dict,
-        'link_to_division_map': link_to_division_map,
-        'n_divisions': n_divisions,
-        'active_param_indices': active_param_indices
-    }
-    with open(os.path.join(tmp_dir, 'prm_job_data.pkl'), 'wb') as f:
-        pickle.dump(shared_data, f)
-    
-    np.save(os.path.join(tmp_dir, 'X_ensemble.npy'), X_ensemble)
-
-    # 3. Create the job submission script
-    job_file_path = _create_prm_generation_job_file(test_dict, ens)
-
-    # 4. Submit the job array
-    job_cmd = f"qsub {job_file_path}"
-    print(f"Submitting PRM generation job: {job_cmd}")
-    os.system(job_cmd)
-
-    # 5. Wait for all .prm files to be created by the job array
-    prm_files_to_check = [os.path.join(tmp_dir, f"{k}.prm") for k in range(ens)]
-    try:
-        _wait_for_files(prm_files_to_check, timeout=600, check_for_errors=True, tmp_dir=tmp_dir)
-    except (TimeoutError, RuntimeError) as e:
-        print(f"\n❌ Failed to generate all .prm files: {e}")
-        sys.exit(1)
-
-    # 6. Clean up temporary data files
-    os.remove(os.path.join(tmp_dir, 'prm_job_data.pkl'))
-    os.remove(os.path.join(tmp_dir, 'X_ensemble.npy'))
-    os.remove(job_file_path)
-
-    print("Finished generating .prm files.")
