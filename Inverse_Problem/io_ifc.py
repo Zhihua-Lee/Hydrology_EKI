@@ -146,8 +146,10 @@ def get_rainfall_for_lid_from_config(target_lid, start_time_str, end_time_str, r
 
     return rainfall_df
 
-def create_gbl(test_dict: dict, ens: int) -> None:
-    
+def _create_single_gbl(test_dict: dict, output_gbl_path: str, prm_file_path: str, ini_file_path: str, csv_file_path: str, sav_file_path: str, scratch_dir_path: str):
+    """
+    A private worker function to create a single GBL file from a template.
+    """
     # 使用多行模板，保留参考版本中的注释和格式
     gbl_template_str = dedent("""
         %Model UID
@@ -241,43 +243,52 @@ def create_gbl(test_dict: dict, ens: int) -> None:
 
         # %End of file
     """)
-    # 从配置中提取必要的参数
+
     start_time = test_dict["time_start"]
     end_time = test_dict["time_end"]
     epoch_time_start = int(time_to_epoch(start_time))
     epoch_time_end = int(time_to_epoch(end_time))
-    tmp_dir = test_dict["tmp_dir"]
-    scratch_dir = test_dict["scratch_dir"]
 
+    template_vars = {
+        "MODEL_NUM": test_dict["model_num"],
+        "START_TIME": start_time,
+        "END_TIME": end_time,
+        "GLOBAL_PARAMS": "11 1 50 3 1 20 35 0 5 0 20 1.0",
+        "RVR_FILE": test_dict["rvr"],
+        "PRM_FILE": prm_file_path,
+        "INI_FILE": ini_file_path,
+        "RAIN_DIR": test_dict["rain_dir"],
+        "EPOCH_START": str(epoch_time_start),
+        "EPOCH_END": str(epoch_time_end),
+        "EVAPO_FILE": test_dict["evapo"],
+        "TEMP_FILE": test_dict["temp"],
+        "CSV_FILE": csv_file_path,
+        "SAV_FILE": sav_file_path,
+        "HPC_SCRATCH_DIR": scratch_dir_path,
+    }
+
+    member_template = Template(gbl_template_str)
+    member_content = member_template.safe_substitute(template_vars)
+    
+    with open(output_gbl_path, "w") as f:
+        f.write(member_content)
+
+def create_ensemble_gbl(test_dict: dict, ens: int) -> None:
+    """
+    Creates a .gbl file for each member of the EKI ensemble.
+    """
+    tmp_dir = test_dict["tmp_dir"]
 
     for i in range(ens):
-        # 对于每个 ensemble 成员，重新构造模板变量字典，
-        template_vars = {
-            "MODEL_NUM": test_dict["model_num"],
-            "START_TIME": start_time,
-            "END_TIME": end_time,
-            "GLOBAL_PARAMS": "11 1 50 3 1 20 35 0 5 0 20 1.0",
-            "RVR_FILE": test_dict["rvr"],
-            "PRM_FILE": tmp_dir + str(i) + ".prm",
-            "INI_FILE": tmp_dir + "init.uini",
-            # "INI_FILE": tmp_dir + "init.rec",
-            "RAIN_DIR": test_dict["rain_dir"],
-            "EPOCH_START": str(epoch_time_start),
-            "EPOCH_END": str(epoch_time_end),
-            "EVAPO_FILE": test_dict["evapo"],
-            "TEMP_FILE": test_dict["temp"],
-            "CSV_FILE": tmp_dir + str(i) + ".csv",
-            "SAV_FILE": tmp_dir + 'meas.sav' ,
-            "HPC_SCRATCH_DIR": os.path.join(scratch_dir, str(i)),
-        }
-    
-        member_template = Template(gbl_template_str)
-        member_content = member_template.safe_substitute(template_vars)
-        
-        member_gbl_name = tmp_dir + str(i) + ".gbl"
-        with open(member_gbl_name, "w") as f:
-            f.write(member_content)
-
+        _create_single_gbl(
+            test_dict=test_dict,
+            output_gbl_path=os.path.join(tmp_dir, f"{i}.gbl"),
+            prm_file_path=os.path.join(tmp_dir, f"{i}.prm"),
+            ini_file_path=os.path.join(tmp_dir, "init.uini"),
+            csv_file_path=os.path.join(tmp_dir, f"{i}.csv"),
+            sav_file_path=os.path.join(tmp_dir, "meas.sav"),
+            scratch_dir_path=os.path.join(test_dict["scratch_dir"], str(i))
+        )
 
 def create_prm_from_division_params(
     test_dict: dict, 
@@ -348,174 +359,6 @@ def create_prm_from_division_params(
             # Write the link ID and its final parameters to the file
             f.write(f"{link_id}\n")
             f.write(" ".join(map(str, rounded_params)) + "\n")
-
-# def create_meas_sav(test_dict: dict, id_list: list) -> None:
-#     """
-#     Create a filtered SAV file based on the given test dictionary and ID list for the test.
-
-#     Args:
-#         test_dict (dict): Test dictionary containing required parameters.
-#         id_list (list): List of link IDs for filtering the SAV file.
-
-#     Returns:
-#         None
-#     """
-#     # Get necessary parameters
-#     sav_name = test_dict['meas_sav'] # lids of gauges for observations
-#     tmp_dir = test_dict['tmp_dir']
-
-#     # loading USGS mapping
-#     usgs_to_link_id, link_to_usgs_id, file_order = load_usgs_mapping(test_dict)
-
-#     # Read existing SAV file and filter lines based on ID list
-#     with open(sav_name, 'r') as f:
-#         sav_lines = [line.strip() for line in f.readlines() if line.strip()] # lids of gauges for observations
-#         new_lines = [line for line in sav_lines if usgs_to_link_id[int(line)] in id_list]     # lids of gauges in the sorted lids from ODE/.prm
-
-#     # Write the filtered lines to a new SAV file
-#     temp_sav_name = tmp_dir + "meas.sav"
-#     os.makedirs(os.path.dirname(temp_sav_name), exist_ok=True)
-#     with open(temp_sav_name, 'w') as f:
-#         for line in new_lines:
-#             f.write("%s\n" % line)
-
-# def update_prm_add_or_overwrite_cr(prm_file_path, cr_value):
-#     """
-#     Update a .prm file by setting the 13th parameter (Cr) for each link.
-#     If a link already has 13 or more parameters, Cr is overwritten.
-#     If it has only 12, Cr is appended.
-
-#     Args:
-#         prm_file_path (str): Full path to the .prm file.
-#         cr_value (float or str): The Cr value to apply.
-#     """
-#     with open(prm_file_path, 'r') as f:
-#         lines = f.readlines()
-
-#     updated_lines = []
-#     i = 0
-#     n = len(lines)
-
-#     # Preserve leading blank lines and the "total count" line
-#     while i < n and lines[i].strip() == "":
-#         updated_lines.append(lines[i])
-#         i += 1
-#     if i < n:
-#         updated_lines.append(lines[i])
-#         i += 1
-
-#     # Each link has two lines: one for ID, one for parameters
-#     while i < n:
-#         # Skip blank lines between blocks
-#         while i < n and lines[i].strip() == "":
-#             updated_lines.append(lines[i])
-#             i += 1
-#         # Link ID line
-#         if i < n:
-#             updated_lines.append(lines[i])
-#             i += 1
-#         # Skip blank lines before parameter line
-#         while i < n and lines[i].strip() == "":
-#             updated_lines.append(lines[i])
-#             i += 1
-#         # Parameter line
-#         if i < n:
-#             tokens = lines[i].strip().split()
-#             if len(tokens) >= 13:
-#                 tokens[12] = str(cr_value)
-#             else:
-#                 tokens.append(str(cr_value))
-#             updated_lines.append(" ".join(tokens) + "\n")
-#             i += 1
-
-#     with open(prm_file_path, 'w') as f:
-#         f.writelines(updated_lines)
-#     print(f"Updated {prm_file_path}: set Cr (param #13) to {cr_value} for all links.")
-
-def update_prm_by_division(prm_file_path: str, link_to_division_map: dict, cr_ref_vec: np.ndarray):
-    """
-    Updates a .prm file by assigning Cr values based on sub-watershed divisions.
-    This version uses structure-aware parsing to robustly handle re-runs.
-
-    Args:
-        prm_file_path (str): Full path to the .prm file to modify.
-        link_to_division_map (dict): A pre-computed dictionary mapping each link ID to its division index.
-        cr_ref_vec (np.ndarray): A vector of Cr values where the index corresponds 
-                                 to the sub-watershed division ID.
-    """
-    print(f"Executing structure-aware update for {prm_file_path}...")
-    
-    with open(prm_file_path, 'r') as f:
-        lines = f.readlines()
-
-    updated_lines = []
-    
-    # Handle the first line (total link count) separately
-    if not lines:
-        print("Warning: PRM file is empty.")
-        return
-    updated_lines.append(lines[0])
-    
-    # Process the rest of the file in pairs (ID line, Parameter line)
-    i = 1
-    while i < len(lines):
-        # The current line should be the ID line.
-        id_line = lines[i].strip()
-        
-        # Find the next non-empty line for parameters
-        param_line_idx = i + 1
-        while param_line_idx < len(lines) and not lines[param_line_idx].strip():
-            param_line_idx += 1
-            
-        if not id_line: # If we encounter blank lines, just skip to the next
-            i += 1
-            continue
-            
-        if param_line_idx >= len(lines):
-            # Reached end of file with a trailing ID line, just append it
-            updated_lines.append(lines[i])
-            break
-
-        param_line = lines[param_line_idx].strip()
-
-        try:
-            current_link_id = int(id_line.split()[0])
-            
-            # Get the correct Cr value for this link
-            division_id = link_to_division_map.get(current_link_id)
-            
-            if division_id is not None:
-                cr_value_for_link = cr_ref_vec[division_id]
-                
-                # Modify the parameter line
-                tokens = param_line.split()
-                if len(tokens) >= 13:
-                    tokens[12] = str(cr_value_for_link)
-                else:
-                    tokens.append(str(cr_value_for_link))
-                
-                # Add the original ID line and the MODIFIED parameter line
-                updated_lines.append(lines[i])
-                updated_lines.append(" ".join(tokens) + "\n")
-            else:
-                # If link not in map, keep original pair of lines
-                updated_lines.append(lines[i])
-                updated_lines.append(lines[param_line_idx])
-
-        except (ValueError, IndexError):
-            # If the "ID line" isn't a valid ID, treat both as unstructured text and preserve them
-            print(f"Warning: Could not parse ID from line: '{id_line}'. Preserving original lines.")
-            updated_lines.append(lines[i])
-            updated_lines.append(lines[param_line_idx])
-
-        # Jump index past the processed pair
-        i = param_line_idx + 1
-
-    # Write the updated content back to the file
-    with open(prm_file_path, 'w') as f:
-        f.writelines(updated_lines)
-        
-    print(f"Finished updating {prm_file_path}.")
 
 def create_presim_prm_from_template(template_prm_path: str, output_prm_path: str, link_to_division_map: dict, cr_ref_vec: np.ndarray):
     """
@@ -606,127 +449,15 @@ def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: st
     """
     Creates the .gbl file for the presimulation run.
     """
-    gbl_template_str = dedent("""
-        %Model UID
-        $MODEL_NUM
-
-        %Begin and end date time
-        $START_TIME 
-        $END_TIME
-
-        0\t%Parameters to filenames
-
-        %Components to print
-        1
-        State0
-
-        %Peakflow function
-        Classic
-
-        %Global parameters
-        %9 v_0   lambda_1 lambda_2 Hu(mm)   infil(mm/hr) perc(mm/hr)  res_surf[minutes]  res_subsurf[days]  res_gw[days]
-        $GLOBAL_PARAMS
-
-        %No. steps stored at each link and
-        %Max no. steps transfered between procs
-        %Discontinuity buffer size
-        30 10 30
-
-        %Topology (0 = .rvr, 1 = database)
-        0 $RVR_FILE
-
-        %DEM Parameters (0 = .prm, 1 = database)
-        0 $PRM_FILE
-
-        %Initial state (0 = .ini, 1 = .uini, 2 = .rec, 3 = .dbc, 3 = .h5)
-        1 $INI_FILE
-
-        %Forcings (0 = none, 1 = .str, 2 = binary, 3 = database, 4 = .ustr, 5 = forecasting, 6 = .gz binary, 7 = recurring)
-        3
-
-        %Rain
-        5 $RAIN_DIR
-        10 60 $EPOCH_START $EPOCH_END
-
-        %Evaporation
-        7 $EVAPO_FILE
-        $EPOCH_START $EPOCH_END
-
-        %Temperature 
-        7 $TEMP_FILE
-        $EPOCH_START $EPOCH_END
-
-        %Dam (0 = no dam, 1 = .dam, 2 = .qvs)
-        0
-
-        %Reservoir ids (0 = no reservoirs, 1 = .rsv, 2 = .dbc file)
-        0
-
-        %Where to put write hydrographs
-        %(0 = no output, 1 = .dat file, 2 = .csv file, 3 = database, 5 = .h5)
-        2 60 $CSV_FILE
-
-        %Where to put peakflow data
-        %(0 = no output, 1 = .pea file, 2 = database)
-        0 
-
-        %.sav files for hydrographs and peak file (meas.sav)
-        %(0 = save no data, 1 = .sav file, 2 = .dbc file, 3 = all links)
-        1 $SAV_FILE
-        0
-
-        %Snapshot information (0 = none, 1 = .rec, 2 = database, 3 = .h5, 4 = recurrent .h5)
-        0
-
-        %Filename for scratch work
-        $HPC_SCRATCH_DIR
-
-        %Numerical solver settings follow
-
-        %facmin, facmax, fac
-        .1 10.0 .9
-
-        %Solver flag (0 = data below, 1 = .rkd)
-        0
-        %Numerical solver index (0-3 explicit, 4 implicit)
-        2
-        %Error tolerances (abs, rel, abs dense, rel dense)
-        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
-        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
-        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
-        1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2 1E-2
-
-        # %End of file
-    """)
-    
-    start_time = test_dict["time_start"]
-    end_time = test_dict["time_end"]
-    epoch_time_start = int(time_to_epoch(start_time))
-    epoch_time_end = int(time_to_epoch(end_time))
-
-    template_vars = {
-        "MODEL_NUM": test_dict["model_num"],
-        "START_TIME": start_time,
-        "END_TIME": end_time,
-        "GLOBAL_PARAMS": "11 1 50 3 1 20 35 0 5 0 20 1.0",
-        "RVR_FILE": test_dict["rvr"],
-        "PRM_FILE": presim_prm_path,
-        "INI_FILE": test_dict['initial_uini'],
-        "RAIN_DIR": test_dict["rain_dir"],
-        "EPOCH_START": str(epoch_time_start),
-        "EPOCH_END": str(epoch_time_end),
-        "EVAPO_FILE": test_dict["evapo"],
-        "TEMP_FILE": test_dict["temp"],
-        "CSV_FILE": output_csv_path,
-        "SAV_FILE": test_dict['link_sav'],
-        "HPC_SCRATCH_DIR": test_dict['scratch_dir'],
-    }
-
-    member_template = Template(gbl_template_str)
-    member_content = member_template.safe_substitute(template_vars)
-    
-    with open(presim_gbl_path, "w") as f:
-        f.write(member_content)
+    _create_single_gbl(
+        test_dict=test_dict,
+        output_gbl_path=presim_gbl_path,
+        prm_file_path=presim_prm_path,
+        ini_file_path=test_dict['initial_uini'],
+        csv_file_path=output_csv_path,
+        sav_file_path=test_dict['link_sav'],
+        scratch_dir_path=test_dict['scratch_dir']
+    )
 
 def create_presim_job_file(test_dict: dict, presim_dir: str, presim_gbl_path: str) -> str:
     """
@@ -815,6 +546,36 @@ def create_meas_sav(test_dict: dict, model_link_ids: list) -> None:
     with open(tmp_sav_name, 'w') as f:
         for line in new_lines:
             f.write("%s\n" % line)
+            
+# def create_meas_sav(test_dict: dict, id_list: list) -> None:
+#     """
+#     Create a filtered SAV file based on the given test dictionary and ID list for the test.
+
+#     Args:
+#         test_dict (dict): Test dictionary containing required parameters.
+#         id_list (list): List of link IDs for filtering the SAV file.
+
+#     Returns:
+#         None
+#     """
+#     # Get necessary parameters
+#     sav_name = test_dict['meas_sav'] # lids of gauges for observations
+#     tmp_dir = test_dict['tmp_dir']
+
+#     # loading USGS mapping
+#     usgs_to_link_id, link_to_usgs_id, file_order = load_usgs_mapping(test_dict)
+
+#     # Read existing SAV file and filter lines based on ID list
+#     with open(sav_name, 'r') as f:
+#         sav_lines = [line.strip() for line in f.readlines() if line.strip()] # lids of gauges for observations
+#         new_lines = [line for line in sav_lines if usgs_to_link_id[int(line)] in id_list]     # lids of gauges in the sorted lids from ODE/.prm
+
+#     # Write the filtered lines to a new SAV file
+#     temp_sav_name = tmp_dir + "meas.sav"
+#     os.makedirs(os.path.dirname(temp_sav_name), exist_ok=True)
+#     with open(temp_sav_name, 'w') as f:
+#         for line in new_lines:
+#             f.write("%s\n" % line)
 
 def create_test_initial_condition(test_dict: dict, id_list: list) -> None:
     """

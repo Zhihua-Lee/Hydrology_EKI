@@ -7,7 +7,7 @@ import argparse
 
 from tqdm import tqdm
 from utils import process_yaml, get_ids, get_subwatershed, load_and_process_observations
-from io_ifc import create_meas_sav, create_test_initial_condition, create_prm_from_division_params, create_gbl, create_batch_job_file, save_statistics_csv, save_particles, update_prm_by_division #update_prm_add_or_overwrite_cr
+from io_ifc import create_meas_sav, create_test_initial_condition, create_prm_from_division_params, create_ensemble_gbl, create_batch_job_file, save_statistics_csv, save_particles, update_prm_by_division #update_prm_add_or_overwrite_cr
 from eki import subsample_data, pert, EnKF_step
 from latent import create_latent, transform_latent_to_physical
 from run import run_test, generate_synthetic_data, generate_prm_files_for_ensemble
@@ -75,7 +75,7 @@ def main(yaml_name, visualize_only=False):
         print("Creating static model input files (.sav, .uini, .gbl, submit script)...")
         create_meas_sav(test_dict, sorted_link_ids)       # Sensor location file.
         create_test_initial_condition(test_dict, sorted_link_ids) # Initial conditions file.
-        create_gbl(test_dict, ens)                        # Global configuration files.
+        create_ensemble_gbl(test_dict, ens)               # Global configuration files for all ensemble members.
         create_batch_job_file(test_dict, tmp_dir)         # Job submission script.
 
         # --- 4. EKI Core Variable Preparation ---
