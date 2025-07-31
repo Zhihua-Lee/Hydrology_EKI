@@ -76,12 +76,14 @@ def unbounded_to_bounded(x: np.ndarray, lb: float, ub: float) -> np.ndarray:
 
 def transform_latent_to_physical(
     test_dict: dict, 
-    X_ensemble: np.ndarray,
-    n_divisions: int
+    X_ensemble: np.ndarray, # Latent params. Shape: (n_active_params, n_divisions, [n_ens])
+    n_divisions: int,
+    active_param_indices: list[int] # List of original indices of active params
 ) -> np.ndarray:
     """
     Transforms latent variables into bounded, physical-space parameters at the DIVISION level.
     This function is vectorized and handles both a single member (2D) and a full ensemble (3D).
+    It only returns the transformed values for the parameters that are active in the EKI.
 
     Args:
         test_dict (dict): Configuration dictionary.
@@ -89,44 +91,34 @@ def transform_latent_to_physical(
                                  Shape: `(n_active_params, n_divisions)` for a single member,
                                  or `(n_active_params, n_divisions, n_ens)` for the full ensemble.
         n_divisions (int): The number of watershed divisions.
+        active_param_indices (list[int]): List of original indices (0-12) for active parameters.
 
     Returns:
-        np.ndarray: A 2D or 3D array of physical parameters, corresponding to the input shape.
-                    Shape: `(n_total_physical_params, n_divisions)` or `(n_total_physical_params, n_divisions, n_ens)`.
-                    Parameters not being updated when creating .prm files will have a value of np.nan as placeholder.
+        np.ndarray: A dense 2D or 3D array of active physical parameters. Shape is identical to X_ensemble.
     """
-    include_parameters = convert_logical(test_dict["prm_dist"])
     lower_bounds = test_dict['prm_lb']
     upper_bounds = test_dict['prm_ub']
     
-    num_active_params = sum(include_parameters)
-    if num_active_params == 0:
-        return np.array([]) # Return empty if no parameters are active
-        
-    TOTAL_PRM_NUM = len(include_parameters)
+    num_active_params = len(active_param_indices)
 
     # Accommodate both 2D (single member) and 3D (full ensemble) inputs
     was_2d = X_ensemble.ndim == 2
     X_proc = np.expand_dims(X_ensemble, axis=2) if was_2d else X_ensemble
     n_ens = X_proc.shape[2]
 
-    # Create an output array initialized with NaNs
-    physical_params_out = np.full((TOTAL_PRM_NUM, n_divisions, n_ens), np.nan)
+    # Create a dense output array, matching the latent input shape
+    physical_params_out = np.zeros_like(X_proc)
 
-    active_param_idx = 0
-    for i, do_transform in enumerate(include_parameters):
-        if do_transform:
-            # Extract the 2D slice (divisions, ens) from the processing array
-            latent_slice_2d = X_proc[active_param_idx, :, :]
-            
-            # Get bounds and apply the transformation to the entire 2D slice at once
-            lb = float(lower_bounds[i])
-            ub = float(upper_bounds[i])
-            
-            physical_values_2d = unbounded_to_bounded(latent_slice_2d, lb, ub)
-            physical_params_out[i, :, :] = physical_values_2d
-            
-            active_param_idx += 1
-    
+    for active_idx, original_idx in enumerate(active_param_indices):
+        # Extract the 2D slice (divisions, ens) for the current active parameter
+        latent_slice_2d = X_proc[active_idx, :, :]
+        
+        # Get bounds for the original parameter index and apply the transformation
+        lb = float(lower_bounds[original_idx])
+        ub = float(upper_bounds[original_idx])
+        
+        physical_values_2d = unbounded_to_bounded(latent_slice_2d, lb, ub)
+        physical_params_out[active_idx, :, :] = physical_values_2d
+
     # Return array with shape corresponding to the input shape
     return np.squeeze(physical_params_out, axis=2) if was_2d else physical_params_out

@@ -44,6 +44,7 @@ def main():
         test_dict = shared_data['test_dict']
         link_to_division_map = shared_data['link_to_division_map']
         n_divisions = shared_data['n_divisions']
+        active_param_indices = shared_data['active_param_indices']
 
     except FileNotFoundError as e:
         print(f"Error: Could not load required data file: {e}")
@@ -55,18 +56,22 @@ def main():
     # 3. Perform the core task for this specific ensemble member
     try:
         # Transform latent params to physical params for this member
-        physical_params_div = transform_latent_to_physical(
+        # The result is a dense array of only the active parameters
+        physical_params_div_active = transform_latent_to_physical(
             test_dict,
-            X_ensemble[:, :, member_id],
-            n_divisions=n_divisions
+            X_ensemble[:, :, member_id], # Shape: (n_active_params, n_divisions)
+            n_divisions=n_divisions,
+            active_param_indices=active_param_indices
         )
         
         # Create the final .prm file
+        output_prm_path = os.path.join(tmp_dir, f"{member_id}.prm")
         create_prm_from_division_params(
             test_dict,
             link_to_division_map,
-            physical_params_div,
-            member_id
+            physical_params_div_active,
+            active_param_indices,
+            output_prm_path
         )
     except Exception as e:
         # It's crucial to catch and report errors from the worker

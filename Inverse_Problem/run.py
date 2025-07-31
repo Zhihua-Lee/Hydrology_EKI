@@ -3,7 +3,7 @@ import numpy as np
 import time
 import pickle
 from typing import List, Tuple, Dict, Union
-from io_ifc import create_presim_prm_from_template, create_presim_gbl, create_presim_job_file, create_prm_from_division_params
+from io_ifc import create_presim_gbl, create_presim_job_file, create_prm_from_division_params
 from utils import get_ids, get_subwatershed
 from latent import transform_latent_to_physical
 
@@ -104,8 +104,25 @@ def generate_synthetic_data(test_dict: Dict) -> None:
     else:
         raise TypeError("Cr_ref must be a number or a list.")
 
+    # Find the original index of the '$Cr$' parameter.
+    try:
+        prm_names = test_dict['prm_names']
+        cr_param_index = prm_names.index('$Cr$')
+    except (ValueError, KeyError):
+        raise ValueError("'$Cr$' must be present in 'prm_names' in the config for simulated data experiments.")
+
+    # Prepare the arguments for the unified PRM creation function.
+    # The physical parameters array should only contain the active parameters.
+    # Here, only Cr is active. Shape must be (n_active_params, n_divisions).
+    physical_params_div_active = cr_ref_vec.reshape(1, num_divisions)
+    
+    # The indices list tells the function where to place the active parameters in the full prm file.
+    active_param_indices = [cr_param_index]
+
     presim_prm_path = os.path.join(presim_dir, "presim.prm")
-    create_presim_prm_from_template(test_dict['prm'], presim_prm_path, link_to_division_map, cr_ref_vec)
+    create_prm_from_division_params(
+        test_dict, link_to_division_map, physical_params_div_active, active_param_indices, presim_prm_path
+    )
 
     presim_gbl_path = os.path.join(presim_dir, "presim.gbl")
     output_csv = test_dict['meas_series']
@@ -234,10 +251,14 @@ def generate_prm_files_for_ensemble(
             pass # Error file didn't exist, which is fine.
 
     # 2. Serialize shared data for worker processes
+    prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
+    active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
+
     shared_data = {
         'test_dict': test_dict,
         'link_to_division_map': link_to_division_map,
-        'n_divisions': n_divisions
+        'n_divisions': n_divisions,
+        'active_param_indices': active_param_indices
     }
     with open(os.path.join(tmp_dir, 'prm_job_data.pkl'), 'wb') as f:
         pickle.dump(shared_data, f)

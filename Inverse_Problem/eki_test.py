@@ -7,7 +7,7 @@ import argparse
 
 from tqdm import tqdm
 from utils import process_yaml, get_ids, get_subwatershed, load_and_process_observations
-from io_ifc import create_meas_sav, create_test_initial_condition, create_prm_from_division_params, create_ensemble_gbl, create_batch_job_file, save_statistics_csv, save_particles, update_prm_by_division #update_prm_add_or_overwrite_cr
+from io_ifc import create_meas_sav, create_test_initial_condition, create_prm_from_division_params, create_ensemble_gbl, create_batch_job_file, save_statistics_csv, save_particles
 from eki import subsample_data, pert, EnKF_step
 from latent import create_latent, transform_latent_to_physical
 from run import run_test, generate_synthetic_data, generate_prm_files_for_ensemble

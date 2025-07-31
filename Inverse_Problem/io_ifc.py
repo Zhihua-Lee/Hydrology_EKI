@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from latent import transform_latent_to_physical
-from typing import List, Tuple, Dict, Union
+from typing import List, Dict
 from utils import time_to_epoch, get_ids, get_subwatershed # <-- Add get_ids and get_subwatershed
 
 from string import Template
@@ -292,63 +292,58 @@ def create_ensemble_gbl(test_dict: dict, ens: int) -> None:
 
 def create_prm_from_division_params(
     test_dict: dict, 
-    link_to_division_map: dict, 
-    physical_params_div: np.ndarray, 
-    member_id: int
+    link_to_division_map: dict,
+    physical_params_div_active: np.ndarray,
+    active_param_indices: list[int],
+    output_prm_path: str
 ) -> None:
     """
-    Creates a single PRM file for one ensemble member using division-level physical parameters.
+    Creates a single PRM file using division-level physical parameters for active params.
     This function reads a template, then updates parameters for each link by looking up
     its division and applying the corresponding physical parameter.
 
     Args:
         test_dict (dict): Configuration dictionary.
         link_to_division_map (dict): A dictionary mapping each link ID to its division index.
-        physical_params_div (np.ndarray): A 2D array of physical parameters at the division level.
-                                          Shape: (n_total_physical_params, n_divisions).
-                                          NaN indicates a parameter should not be updated.
-        member_id (int): The ID of the ensemble member, used for the filename.
+        physical_params_div_active (np.ndarray): A 2D array of *active* physical parameters.
+                                                 Shape: (n_active_params, n_divisions).
+        active_param_indices (list[int]): A list of original parameter indices (0-12)
+                                          that correspond to the rows in `physical_params_div_active`.
+        output_prm_path (str): The full path for the output .prm file.
     """
     # 1. Read the template PRM file to get the base parameter structure
     prm_template_path = test_dict['prm']
     with open(prm_template_path, 'r') as f:
         prm_lines = [line for line in f.readlines() if line.strip()]
     
-    template_id_list = [int(i.strip('\n')) for i in prm_lines[1::2]]
+    template_id_list = [int(line.strip().split()[0]) for line in prm_lines[1::2]]
     prm_list_template = np.array([[float(i) for i in line.strip('\n').split()] for line in prm_lines[2::2]])
     
     # Create a dictionary for quick lookup of template parameters for any link ID
     template_params_dict = {link_id: params for link_id, params in zip(template_id_list, prm_list_template)}
 
     # 2. Open the output file
-    tmp_dir = test_dict["tmp_dir"]
-    prm_name = os.path.join(tmp_dir, f"{member_id}.prm")
-    
     # The authoritative list of link IDs is now derived directly from the map
     sorted_link_ids = sorted(link_to_division_map.keys())
     n_links = len(sorted_link_ids)
 
-    with open(prm_name, 'w') as f:
+    with open(output_prm_path, 'w') as f:
         # Write the header (total number of links)
         f.write(f"{n_links}\n")
 
         # 3. Iterate through each link required by the model
         for link_id in sorted_link_ids:
             # Start with the default parameters from the template
-            final_params = template_params_dict.get(link_id, [0.0] * physical_params_div.shape[0]).copy()
+            n_total_params = prm_list_template.shape[1]
+            final_params = template_params_dict.get(link_id, [0.0] * n_total_params).copy()
             
             # Find the division this link belongs to
             division_id = link_to_division_map.get(link_id)
             
             if division_id is not None:
-                # For each parameter type, check if it needs to be updated
-                for param_idx in range(physical_params_div.shape[0]):
-                    # Get the updated value for this parameter type and division
-                    updated_val = physical_params_div[param_idx, division_id]
-                    
-                    # If the value is not NaN, it means it was updated by the EKI step
-                    if not np.isnan(updated_val):
-                        final_params[param_idx] = updated_val
+                # For each *active* parameter, update its value in the final parameter list
+                for active_idx, original_param_idx in enumerate(active_param_indices):
+                    final_params[original_param_idx] = physical_params_div_active[active_idx, division_id]
             
             # Round all parameters to the required precision before writing
             rounded_params = [
@@ -359,91 +354,6 @@ def create_prm_from_division_params(
             # Write the link ID and its final parameters to the file
             f.write(f"{link_id}\n")
             f.write(" ".join(map(str, rounded_params)) + "\n")
-
-def create_presim_prm_from_template(template_prm_path: str, output_prm_path: str, link_to_division_map: dict, cr_ref_vec: np.ndarray):
-    """
-    Creates a new .prm file from a template, assigning Cr values based on sub-watershed divisions.
-
-    Args:
-        template_prm_path (str): Full path to the template .prm file.
-        output_prm_path (str): Full path for the newly created .prm file.
-        link_to_division_map (dict): A pre-computed dictionary mapping each link ID to its division index.
-        cr_ref_vec (np.ndarray): A vector of Cr values where the index corresponds 
-                                 to the sub-watershed division ID.
-    """
-    print(f"Creating new PRM file '{output_prm_path}' from template '{template_prm_path}'...")
-    
-    with open(template_prm_path, 'r') as f:
-        lines = f.readlines()
-
-    updated_lines = []
-    
-    # Handle the first line (total link count) separately
-    if not lines:
-        print("Warning: Template PRM file is empty.")
-        return
-    updated_lines.append(lines[0])
-    
-    # Process the rest of the file in pairs (ID line, Parameter line)
-    i = 1
-    while i < len(lines):
-        # The current line should be the ID line.
-        id_line = lines[i].strip()
-        
-        # Find the next non-empty line for parameters
-        param_line_idx = i + 1
-        while param_line_idx < len(lines) and not lines[param_line_idx].strip():
-            param_line_idx += 1
-            
-        if not id_line: # If we encounter blank lines, just skip to the next
-            i += 1
-            continue
-            
-        if param_line_idx >= len(lines):
-            # Reached end of file with a trailing ID line, just append it
-            updated_lines.append(lines[i])
-            break
-
-        param_line = lines[param_line_idx].strip()
-
-        try:
-            current_link_id = int(id_line.split()[0])
-            
-            # Get the correct Cr value for this link
-            division_id = link_to_division_map.get(current_link_id)
-            
-            if division_id is not None:
-                cr_value_for_link = cr_ref_vec[division_id]
-                
-                # Modify the parameter line
-                tokens = param_line.split()
-                if len(tokens) >= 13:
-                    tokens[12] = str(cr_value_for_link)
-                else:
-                    tokens.append(str(cr_value_for_link))
-                
-                # Add the original ID line and the MODIFIED parameter line
-                updated_lines.append(lines[i])
-                updated_lines.append(" ".join(tokens) + "\n")
-            else:
-                # If link not in map, keep original pair of lines
-                updated_lines.append(lines[i])
-                updated_lines.append(lines[param_line_idx])
-
-        except (ValueError, IndexError):
-            # If the "ID line" isn't a valid ID, treat both as unstructured text and preserve them
-            print(f"Warning: Could not parse ID from line: '{id_line}'. Preserving original lines.")
-            updated_lines.append(lines[i])
-            updated_lines.append(lines[param_line_idx])
-
-        # Jump index past the processed pair
-        i = param_line_idx + 1
-
-    # Write the updated content back to the file
-    with open(output_prm_path, 'w') as f:
-        f.writelines(updated_lines)
-        
-    print(f"Finished creating {output_prm_path}.")
 
 def create_presim_gbl(test_dict: dict, presim_prm_path: str, presim_gbl_path: str, output_csv_path: str) -> None:
     """
@@ -669,22 +579,17 @@ def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_mea
         np.savetxt(out_name_std, Y_std_out_content, delimiter=",", fmt="%.5e")
 
     if X_mat is not None:
-        # Transform latent parameters to their physical representation for analysis.
-        # FIX: Only save the *active* parameters to maintain compatibility with visualize.py
-        # and to produce compact, NaN-free CSV files, just like the old version did.
-        prm_dist_bool = [val.lower() == 'true' for val in test_dict["prm_dist"]]
+        # The returned parameters are already dense (active only).
+        prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
         active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
-
         n_divisions = division_to_link_map.shape[0]
-        X_physical = transform_latent_to_physical(test_dict, X_mat, n_divisions)
+        X_physical_active = transform_latent_to_physical(test_dict, X_mat, n_divisions, active_param_indices)
 
-        # Select only the active parameter rows before calculating statistics.
-        X_physical_active = X_physical[active_param_indices, :, :]
-        X_mean = np.mean(X_physical_active, axis=2) # axis=2 is the ensemble dimension
+        X_mean = np.mean(X_physical_active, axis=2)
         X_std = np.std(X_physical_active, axis=2)
 
         X_name_mean = os.path.join(out_dir, f"{name}_params_mean.csv")
-        np.savetxt(X_name_mean, X_mean, delimiter=",", fmt="%.5e") # This will save a 2D array (params, divisions)
+        np.savetxt(X_name_mean, X_mean, delimiter=",", fmt="%.5e")
 
         X_name_std = os.path.join(out_dir, f"{name}_params_std.csv")
         np.savetxt(X_name_std, X_std, delimiter=",", fmt="%.5e")
@@ -703,15 +608,11 @@ def save_particles(test_dict: dict, division_to_link_map: np.ndarray, X_particle
     """
     out_dir = test_dict["out_dir"]
 
-    # Transform latent parameters to their physical representation before saving.
-    # FIX: Only save the *active* parameters to NPY to maintain consistency with CSVs
-    # and the expectations of visualize.py.
-    prm_dist_bool = [val.lower() == 'true' for val in test_dict["prm_dist"]]
+    # The returned parameters are already dense (active only).
+    prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
     active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
-
     n_divisions = division_to_link_map.shape[0]
-    X_physical_full = transform_latent_to_physical(test_dict, X_particle, n_divisions)
-    X_physical_active = X_physical_full[active_param_indices, :, :]
+    X_physical_active = transform_latent_to_physical(test_dict, X_particle, n_divisions, active_param_indices)
 
     X_particle_name = os.path.join(out_dir, f"{name}_params_particles.npy")
     Y_particle_name = os.path.join(out_dir, f"{name}_particles.npy")
