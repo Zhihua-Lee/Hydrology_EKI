@@ -191,7 +191,8 @@ def _create_prm_generation_job_file(test_dict: dict, ens: int) -> str:
         # f.write('module load python\n') # Ensure python environment is loaded
         f.write('\n')
         # Pass the temporary directory as an argument to the worker script
-        f.write(f'/Users/zli333/virtenvs/Hydro_py3108/bin/python {worker_script_path} {tmp_dir}\n')
+        python_executable = test_dict['hpc_python_path']
+        f.write(f'{python_executable} {worker_script_path} {tmp_dir}\n')
     return job_file_path
 
 def generate_prm_files_for_ensemble(
