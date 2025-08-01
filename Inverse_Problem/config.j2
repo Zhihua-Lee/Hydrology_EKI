@@ -58,7 +58,7 @@ plot_usgs: [                              # USGS observation station gauge ID fo
   "5573540", "5578500", "5579725", "5579500", "5572000"
 ]
 
-meas_type: threshed_series             # Observation type: 'metric', 'threshed_series', 'metric+threshed_series', or 'series' 
+meas_type: metric+threshed_series             # Observation type: 'metric', 'threshed_series', 'metric+threshed_series', or 'series' 
 thresh_val: 1.5                             # Threshold value (observations below this are ignored when using threshold-based processing)
 {# abs_std_meas: 42                         # Absolute standard deviation of observations #}
 abs_std_meas: 0                         # Absolute standard deviation of observations
@@ -71,7 +71,7 @@ event_finding:
   min_length: 72    # Minimum duration (hours) for a sequence to be considered an event
 
 # EKI Algorithm Parameters
-steps: 1                                 # Number of EKI assimilation steps
+steps: 10                                 # Number of EKI assimilation steps
 num_ensembles: 100                        # Number of EKI ensembles
 
 # EKI parameter inheritage / Watershed Configuration

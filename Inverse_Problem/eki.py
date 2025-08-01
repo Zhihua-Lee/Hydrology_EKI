@@ -198,7 +198,7 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
     # If using 'metric' only, just use metric and thresh every other iteration
     if test_dict["meas_type"] == 'metric':
         print("EnKF step: using metric")
-        y_use, Y_use, R_use = event_meas_op(y, Y, R)
+        y_use, Y_use, R_use = event_meas_op(y, Y, R, test_dict)
         X_post = EnKF(X, Y_use, y_use, R_use)
         # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
     
@@ -217,7 +217,7 @@ def EnKF_step(y: np.ndarray, X: np.ndarray, Y: np.ndarray, R: np.ndarray, test_d
     elif test_dict["meas_type"] == 'metric+threshed_series':
         print("EnKF step: using metric+threshed_series")
         if np.mod(i, 2) == 0:
-            y_use, Y_use, R_use = event_meas_op(y, Y, R)
+            y_use, Y_use, R_use = event_meas_op(y, Y, R, test_dict)
             X_post = EnKF(X, Y_use, y_use, R_use)
             # print('i=',i,':',np.linalg.norm(X_post-X)/np.linalg.norm(X))
         else:
@@ -524,55 +524,84 @@ def find_metric_values(event_list, event_val_list):
         std_y_values.append([std_y_value])
     return max_values_idx, max_values, mean_values, slope_values, int_values, slope_idx, std_values, mean_y_values, std_y_values
 
-def event_meas_op(y: np.ndarray, Y_pre: np.ndarray, R: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def event_meas_op(y: np.ndarray, Y_pre: np.ndarray, R: np.ndarray, test_dict: dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Perform various operations on events based on input data and parameters.
+    Perform event-based metric operations on multi-gauge data.
+
+    This function processes each gauge's time series independently to find events
+    and calculate metrics, then concatenates the results. It assumes the input
+    arrays `y`, `Y_pre`, and `R` are flattened in Fortran ('F') order, meaning
+    data for each gauge is contiguous.
 
     Args:
-        y (np.ndarray): 1D array representing the original time series.
-        Y_pre (np.ndarray): 2D array representing the ensemble forecast time series.
-        R (np.ndarray): diagonal of the measurement error covariance.
+        y (np.ndarray): Flattened observation vector from all gauges. Shape: `(n_timesteps * n_gauges, 1)`.
+        Y_pre (np.ndarray): Flattened model output ensemble. Shape: `(n_timesteps * n_gauges, n_ens)`.
+        R (np.ndarray): Flattened diagonal of the measurement error covariance. Shape: `(n_timesteps * n_gauges,)`.
+        test_dict (dict): The main configuration dictionary.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing the calculated event properties for observation,
-                                                  ensemble forecast, and measurement error covariance.
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing the concatenated event metrics for
+        the observation, the model ensemble, and the estimated metric error covariance diagonal.
     """
-    #TODO: enable using more than just thses metrics. I.E allow a feature to specify the specific metrics included
+    # --- Configuration ---
+    usgs_gauge_ids = test_dict['meas_usgs']
+    if isinstance(usgs_gauge_ids, str):
+        usgs_gauge_ids = [usgs_gauge_ids]
+    n_gauges = len(usgs_gauge_ids)
     
-    # Get the "metric" measurement 
-    N_y = Y_pre.shape[0]
+    if n_gauges == 0:
+        raise ValueError("Metric processing requires at least one gauge in 'meas_usgs'.")
+
+    total_obs_len = y.shape[0]
+    if total_obs_len % n_gauges != 0:
+        raise ValueError(f"Total observation length ({total_obs_len}) is not divisible by the number of gauges ({n_gauges}).")
+    n_timesteps = total_obs_len // n_gauges
+
+    event_params = test_dict.get('event_finding', {})
+    min_dist = event_params.get('min_dist', 24)
+    min_thresh_pct = event_params.get('min_thresh_pct', 25)
+    min_length = event_params.get('min_length', 72)
     n_samp = 1000
-    min_dist = 24
-    min_thresh = np.percentile(y[y > 0], 25)
-    min_length = 72
-    y_event_idx_list, y_event_list = find_events(y.flatten(), min_dist, min_thresh, min_length)
-    y_max_idx, y_max, y_mean, y_slope, _, y_slope_idx, std_values, mean_y_values, std_y_values = find_metric_values(y_event_idx_list, y_event_list)
-    y_event = np.concatenate((y_max, y_mean, std_values, mean_y_values, std_y_values))
+    
+    all_y_events, all_Y_pre_events, all_R_events_diags = [], [], []
 
-    # Get the "metric" operator
-    Y_pre_max = max_event_op(y_max_idx, Y_pre)
-    Y_pre_mean = mean_event_op(y_event_idx_list, Y_pre)
-    Y_pre_std = std_event_op(y_event_idx_list, Y_pre)
-    Y_pre_y_mean = mean_y_event_op(y_event_idx_list, Y_pre)
-    Y_pre_y_std = std_y_event_op(y_event_idx_list, Y_pre)
-    Y_pre_event = np.concatenate((Y_pre_max, Y_pre_mean, Y_pre_std, Y_pre_y_mean, Y_pre_y_std))
+    for i in range(n_gauges):
+        start_idx, end_idx = i * n_timesteps, (i + 1) * n_timesteps
+        y_gauge, Y_pre_gauge, R_gauge = y[start_idx:end_idx, :], Y_pre[start_idx:end_idx, :], R[start_idx:end_idx]
 
-    # Perturb the measurement measurements for emperical approximation of "event" covariance
-    # Note: we are making the approximation of both uncorrelated metrics and gaussian metrics, 
-    # this is required by EKI but there are other choices that could be made, like keeping R_event full rank
-    # or making a different choice of gaussian approximation.
-    y_pert_unbounded = y.reshape(-1, 1) + np.sqrt(R).reshape(-1, 1) * np.random.normal(0, 1, (N_y, n_samp))
-    y_pert = np.maximum(y_pert_unbounded, 0)
-    y_pert_max = max_event_op(y_max_idx, y_pert)
-    y_pert_mean = mean_event_op(y_event_idx_list, y_pert)
-    y_pert_std = std_event_op(y_event_idx_list, y_pert)
-    y_pert_y_mean = mean_y_event_op(y_event_idx_list, y_pert)
-    y_pert_y_std = std_y_event_op(y_event_idx_list, y_pert)
-    y_pert_event = np.concatenate((y_pert_max, y_pert_mean, y_pert_std, y_pert_y_mean, y_pert_y_std))
-    C_yy = np.cov(y_pert_event)
-    R_event = np.diag(C_yy)
+        min_thresh = np.percentile(y_gauge[y_gauge > 0], min_thresh_pct) if np.any(y_gauge > 0) else 0
+        y_event_idx_list, y_event_list = find_events(y_gauge.flatten(), min_dist, min_thresh, min_length)
+        
+        if not y_event_idx_list:
+            print(f"Warning: No events found for gauge {i+1} ({usgs_gauge_ids[i]}). Skipping its metrics.")
+            continue
 
-    return y_event, Y_pre_event, R_event
+        y_max_idx, y_max, y_mean, _, _, _, std_values, mean_y_values, std_y_values = find_metric_values(y_event_idx_list, y_event_list)
+        y_event_gauge = np.concatenate((y_max, y_mean, std_values, mean_y_values, std_y_values))
+        all_y_events.append(y_event_gauge)
+        
+        Y_pre_event_gauge = np.concatenate((
+            max_event_op(y_max_idx, Y_pre_gauge), mean_event_op(y_event_idx_list, Y_pre_gauge),
+            std_event_op(y_event_idx_list, Y_pre_gauge), mean_y_event_op(y_event_idx_list, Y_pre_gauge),
+            std_y_event_op(y_event_idx_list, Y_pre_gauge)
+        ))
+        all_Y_pre_events.append(Y_pre_event_gauge)
+
+        y_pert_unbounded = y_gauge + np.sqrt(R_gauge)[:, np.newaxis] * np.random.normal(0, 1, (n_timesteps, n_samp))
+        y_pert = np.maximum(y_pert_unbounded, 0)
+        y_pert_event = np.concatenate((
+            max_event_op(y_max_idx, y_pert), mean_event_op(y_event_idx_list, y_pert),
+            std_event_op(y_event_idx_list, y_pert), mean_y_event_op(y_event_idx_list, y_pert),
+            std_y_event_op(y_event_idx_list, y_pert)
+        ))
+        C_yy_gauge = np.cov(y_pert_event)
+        all_R_events_diags.append(np.diag(C_yy_gauge))
+
+    if not all_y_events:
+        print("Warning: No events were found for any gauge. Returning empty metric arrays.")
+        return np.array([]), np.array([]), np.array([])
+        
+    return np.concatenate(all_y_events, axis=0), np.concatenate(all_Y_pre_events, axis=0), np.concatenate(all_R_events_diags, axis=0)
 
 
 # ==============================================================================

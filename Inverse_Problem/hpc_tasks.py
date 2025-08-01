@@ -231,7 +231,11 @@ def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas:
             
     read_values_fixed = [res[:, :-1] for res in read_values]
     read_values_measured = [res[:, idx_meas] for res in read_values_fixed]
-    Y = np.concatenate([np.reshape(rm, (-1, 1)) for rm in read_values_measured], axis=1)
+    # Flatten each ensemble member's output in Fortran order to make data from each gauge contiguous,
+    # then concatenate all members. This is crucial for multi-gauge 'metric' assimilation.
+    Y = np.concatenate(
+        [np.reshape(rm, (-1, 1), order='F') for rm in read_values_measured], axis=1
+    )
     Y_plot = np.array(read_values_fixed)
     
     # Cleanup intermediate files from the simulation job array

@@ -242,9 +242,9 @@ def load_and_process_observations(test_dict: Dict, file_order: np.ndarray, usgs_
     
     # Concatenate the time series from all selected gauges column-wise -> (n_timesteps, n_gauges)
     data_use_all_gauges = np.concatenate(all_data_use_cols, axis=1)
-    # Reshape the data into a single long vector for assimilation, matching the model output Y.
-    # This is done in a row-major fashion, e.g., [g1_t1, g2_t1, ..., g1_t2, g2_t2, ...]
-    data_use = data_use_all_gauges.reshape(-1, 1)
+    # Reshape into a single long vector in Fortran order, making data from each gauge contiguous.
+    # This is crucial for multi-gauge 'metric' assimilation. (e.g., [g1_t1...g1_tN, g2_t1...g2_tN, ...])
+    data_use = data_use_all_gauges.reshape(-1, 1, order='F')
     print(f"Final assimilation vector 'y' shape: {data_use.shape} (concatenated from {len(usgs_gauge_ids)} gauges)")
     
     data_plot, sav_ids = subsample_data(data_tmp, test_dict, sorted_link_ids, file_order)
