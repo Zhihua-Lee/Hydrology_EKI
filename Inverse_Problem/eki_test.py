@@ -11,6 +11,7 @@ from io_ifc import create_meas_sav, create_test_initial_condition, create_ensemb
 from eki import subsample_data, perturb_ensemble, EnKF_step
 from latent import create_latent, transform_latent_to_physical
 from hpc_tasks import run_hpc_presimulation_for_synthetic_data, run_hpc_prm_generation_ensemble, run_hpc_simulation_ensemble
+from io_ifc import create_meas_sav, create_test_initial_condition, create_ensemble_gbl, create_eki_run_job_file, save_statistics_csv, save_particles
 from ifc_usgs_fileorder import load_usgs_mapping
 
 import pandas as pd
@@ -21,6 +22,11 @@ def main(yaml_name, visualize_only=False):
     # --- 1. Configuration and Setup ---
     # Load experiment settings from the specified YAML file.
     test_dict = process_yaml(yaml_name)
+    # Set the global random seed for numpy to ensure all subsequent random
+    # operations in this script and imported modules are deterministic.
+    seed = int(test_dict['random_seed'])
+    np.random.seed(seed)
+    print(f"\n--- Global random seed set to: {seed} for reproducibility. ---")
 
     if not visualize_only:
         tmp_dir = test_dict['tmp_dir']
@@ -109,7 +115,7 @@ def main(yaml_name, visualize_only=False):
             test_dict, output_file_link_id_order, usgs_to_link_id, sorted_link_ids
         )  # assimilation_data(flattened): (n_gauges * t_steps,);   plotting_data: (t_steps, n_gauges)
         print("Saving initial measurement statistics...")
-        save_statistics_csv(test_dict, division_to_link_map, plotting_data, X_mat=None, name='csv/' + "meas")
+        save_statistics_csv(test_dict, division_to_link_map, Y_data=plotting_data, X_mat=None, name='csv/' + "meas")
 
         # Finalize y and R.
         y = np.reshape(assimilation_data,(-1,1)) # Reshape observation vector as: (n_gauges * t_steps, 1)
@@ -123,12 +129,13 @@ def main(yaml_name, visualize_only=False):
         for i in tqdm(range(step_num)):
             # --- Prior Step ---
             X_prior = perturb_ensemble(X_post, test_dict, division_to_link_map)
-            # Prepare files and then run the simulation ensemble on HPC
+            # Generate PRM files for the updated ensemble
             run_hpc_prm_generation_ensemble(
                 test_dict, X_prior, ens, division_to_link_map.shape[0], link_to_division_map
             )
+            # Run the simulation ensemble on HPC
             Y_prior, Y_plot_prior = run_hpc_simulation_ensemble(ens, X_prior, tmp_dir, col_idx_in_sav)
-            save_particles(test_dict, division_to_link_map, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
+            save_particles(test_dict, division_to_link_map, Y_plot_prior, X_prior, name='npy/' + str(i) + '_prior')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_prior, X_prior, name='csv/' + str(i) + "_prior")
             
             # --- Posterior Step (Assimilation) ---
@@ -138,12 +145,11 @@ def main(yaml_name, visualize_only=False):
             X_post_flat = EnKF_step(y, X_prior_flat, Y_prior, R, test_dict, i)
             # Reshape the updated 2D parameters back to 3D for the next iteration
             X_post = X_post_flat.reshape(n_params, n_div, n_ens_members)
-            # Generate PRM files for the updated ensemble
             run_hpc_prm_generation_ensemble(
                 test_dict, X_post, ens, division_to_link_map.shape[0], link_to_division_map
             )
             Y_post, Y_plot_post = run_hpc_simulation_ensemble(ens, X_post, tmp_dir, col_idx_in_sav)
-            save_particles(test_dict, division_to_link_map, X_post, Y_plot_post, name='npy/' + str(i) + '_post')
+            save_particles(test_dict, division_to_link_map, Y_plot_post, X_post, name='npy/' + str(i) + '_post')
             save_statistics_csv(test_dict, division_to_link_map, Y_plot_post, X_post, name='csv/' + str(i) + "_post")
     else:
         # --- Precondition Check for visualize-only mode ---

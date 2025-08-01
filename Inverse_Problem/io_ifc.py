@@ -640,7 +640,8 @@ def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_dat
                                            Shape: (n_divisions, n_links).
         Y_data (np.ndarray): The model output data. Can be the full ensemble (n_ens, t_steps, n_links)
                              or a pre-calculated mean (t_steps, n_links).
-        X_mat (np.ndarray, optional): The latent parameter ensemble. Shape: (n_latent_params, n_divisions, n_ens).
+        X_mat (np.ndarray, optional): The latent parameter ensemble. If provided, its stats will also be saved.
+                                      Shape: (n_latent_params, n_divisions, n_ens). Defaults to None.
         name (str, optional): A prefix for the output filenames (e.g., '0_prior').
     """
     out_dir = test_dict["out_dir"]
@@ -648,8 +649,19 @@ def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_dat
     sav_name = os.path.join(tmp_dir, "meas.sav")
 
     if Y_data.ndim == 3:  # Full particle set provided
-        Y_mean = np.mean(Y_data, axis=0)
-        Y_std = np.std(Y_data, axis=0)
+        # Handle different potential particle shapes
+        if Y_data.shape[0] == test_dict.get('num_ensembles', -1): # Shape: (n_ens, t_steps, n_links)
+            axis_for_stats = 0
+        elif Y_data.shape[2] == test_dict.get('num_ensembles', -1): # Shape: (t_steps, n_links, n_ens)
+            axis_for_stats = 2
+        else:
+            print(f"Warning: Y_data has 3 dims but shape {Y_data.shape} doesn't match ensemble size. Cannot calc stats.")
+            axis_for_stats = None
+
+        if axis_for_stats is not None:
+            Y_mean = np.mean(Y_data, axis=axis_for_stats)
+            Y_std = np.std(Y_data, axis=axis_for_stats)
+
     else:  # Pre-calculated mean provided
         Y_mean = Y_data
         Y_std = None
@@ -668,21 +680,22 @@ def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_dat
 
     if X_mat is not None:
         # The returned parameters are already dense (active only).
-        prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
-        active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
-        n_divisions = division_to_link_map.shape[0]
-        X_physical_active = transform_latent_to_physical(test_dict, X_mat, n_divisions, active_param_indices)
+        if X_mat.ndim == 3:
+            prm_dist_bool = [str(val).lower() == 'true' for val in test_dict["prm_dist"]]
+            active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
+            n_divisions = division_to_link_map.shape[0]
+            X_physical_active = transform_latent_to_physical(test_dict, X_mat, n_divisions, active_param_indices)
 
-        X_mean = np.mean(X_physical_active, axis=2)
-        X_std = np.std(X_physical_active, axis=2)
+            X_mean = np.mean(X_physical_active, axis=2)
+            X_std = np.std(X_physical_active, axis=2)
 
-        X_name_mean = os.path.join(out_dir, f"{name}_params_mean.csv")
-        np.savetxt(X_name_mean, X_mean, delimiter=",", fmt="%.5e")
+            X_name_mean = os.path.join(out_dir, f"{name}_params_mean.csv")
+            np.savetxt(X_name_mean, X_mean, delimiter=",", fmt="%.5e")
 
-        X_name_std = os.path.join(out_dir, f"{name}_params_std.csv")
-        np.savetxt(X_name_std, X_std, delimiter=",", fmt="%.5e")
+            X_name_std = os.path.join(out_dir, f"{name}_params_std.csv")
+            np.savetxt(X_name_std, X_std, delimiter=",", fmt="%.5e")
 
-def save_particles(test_dict: dict, division_to_link_map: np.ndarray, X_particle: np.ndarray, Y_particle: np.ndarray, name: str = "results") -> None:
+def save_particles(test_dict: dict, division_to_link_map: np.ndarray, Y_particle: np.ndarray, X_particle: np.ndarray, name: str = "results") -> None:
     """
     Save the entire ensemble of parameters (X) and model outputs (Y) to .npy files.
 
@@ -690,8 +703,8 @@ def save_particles(test_dict: dict, division_to_link_map: np.ndarray, X_particle
         test_dict (dict): The main configuration dictionary.
         division_to_link_map (np.ndarray): A sparse matrix mapping divisions to links, used for parameter transformation.
                                            Shape: (n_divisions, n_links).
-        X_particle (np.ndarray): The latent parameter ensemble. Shape: (n_latent_params, n_divisions, n_ens).
         Y_particle (np.ndarray): The model output ensemble. Shape: (n_ens, t_steps, n_links).
+        X_particle (np.ndarray): The latent parameter ensemble. Shape: (n_latent_params, n_divisions, n_ens).
         name (str, optional): A prefix for the output filenames (e.g., '0_prior').
     """
     out_dir = test_dict["out_dir"]

@@ -8,7 +8,8 @@ project_root: "/Users/zli333/DA/2025_EKI"
 # Absolute path to the Python interpreter on the HPC cluster.
 # This is crucial for running worker scripts (like prm generation) in the correct environment.
 hpc_python_path: "/Users/zli333/virtenvs/Hydro_py3108/bin/python"
-
+# A fixed integer to ensure reproducibility of random operations.
+random_seed: 42
 
 # EKI Simulated Experiment Settings
 {% set using_simulated_data = True %} # to activate the if sentence below
