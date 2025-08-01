@@ -733,7 +733,12 @@ def generate_hydrograph_metric_map(assimilation_phase, visual_output_dir, out_di
 
     # --- Define key gauge IDs ---
     all_gauge_ids_to_plot = list(dict.fromkeys(test_dict.get("plot_usgs", []))) # Remove duplicates
-    assimilation_gauge_id = str(test_dict.get("meas_usgs")).strip()
+    assimilation_gauge_ids = test_dict.get("meas_usgs", [])
+    if isinstance(assimilation_gauge_ids, str): # Backward compatibility
+        assimilation_gauge_ids = [assimilation_gauge_ids]
+    # Ensure they are all strings and stripped
+    assimilation_gauge_ids = [str(g).strip() for g in assimilation_gauge_ids]
+
     most_downstream_gauge_id = str('05583000').strip() # As per reference catchment_maps.py
 
     # --- Fetch gauge coordinates ---
@@ -852,14 +857,15 @@ def generate_hydrograph_metric_map(assimilation_phase, visual_output_dir, out_di
     path_effects = [pe.withStroke(linewidth=3, foreground="white")]
     
     # Plot non-special gauges first
-    other_gauges = gauge_points[~gauge_points['gauge_id'].isin([assimilation_gauge_id, most_downstream_gauge_id])]
+    special_gauges = set(assimilation_gauge_ids) | {most_downstream_gauge_id}
+    other_gauges = gauge_points[~gauge_points['gauge_id'].isin(special_gauges)]
     if not other_gauges.empty:
         other_gauges.plot(ax=ax, marker='o', color='red', markersize=40, edgecolor='black', zorder=5, label='Verification Gauge')
 
     # Plot assimilation gauge
-    assim_gauge_plot = gauge_points[gauge_points['gauge_id'] == assimilation_gauge_id]
+    assim_gauge_plot = gauge_points[gauge_points['gauge_id'].isin(assimilation_gauge_ids)]
     if not assim_gauge_plot.empty:
-         assim_gauge_plot.plot(ax=ax, marker='o', color='cyan', markersize=60, edgecolor='black', zorder=5, label='Assimilation Gauge')
+         assim_gauge_plot.plot(ax=ax, marker='o', color='cyan', markersize=60, edgecolor='black', zorder=5, label='Assimilation Gauge(s)')
 
     # Plot the most downstream gauge with a star on top
     downstream_gauge = gauge_points[gauge_points['gauge_id'] == most_downstream_gauge_id]

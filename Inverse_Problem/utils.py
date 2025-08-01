@@ -189,7 +189,11 @@ def load_and_process_observations(test_dict: Dict, file_order: np.ndarray, usgs_
     """
     print("\n--- Loading and Processing Observation Data ---")
     data_file = test_dict['meas_series']
-    usgs_gauge_id = test_dict['meas_usgs']
+    # Handle single string or list of strings for backward compatibility and new feature
+    usgs_gauge_ids = test_dict['meas_usgs']
+    if isinstance(usgs_gauge_ids, str):
+        usgs_gauge_ids = [usgs_gauge_ids]
+
     using_simulated_data = test_dict['using_simulated_data']
 
     if using_simulated_data:
@@ -217,13 +221,40 @@ def load_and_process_observations(test_dict: Dict, file_order: np.ndarray, usgs_
         
     print("Processed data shape:", data_tmp.shape)
     
-    col_idx_gid = np.where(file_order == usgs_to_link_id[usgs_gauge_id])[0]
-    print(f"Column index for observation gauge {usgs_gauge_id} in data file: {col_idx_gid}")
-    data_use = data_tmp[:, col_idx_gid]
+    # --- MODIFIED LOGIC FOR MULTIPLE GAUGES ---
+    all_data_use_cols = []
+    print(f"Attempting to load data for assimilation gauges: {usgs_gauge_ids}")
+    for usgs_id in usgs_gauge_ids:
+        try:
+            link_id = usgs_to_link_id[usgs_id]
+            col_idx = np.where(file_order == link_id)[0]
+            if col_idx.size > 0:
+                # Extract the column as a (T, 1) array and append
+                all_data_use_cols.append(data_tmp[:, col_idx])
+                print(f"  - Found data for gauge {usgs_id} (LID: {link_id}) at column index {col_idx[0]} in the observation source file.")
+            else:
+                print(f"  - Warning: Could not find link ID {link_id} for gauge {usgs_id} in the data file's column order.")
+        except KeyError:
+            print(f"  - Warning: Gauge ID '{usgs_id}' not found in the usgs_to_link_id mapping.")
+
+    if not all_data_use_cols:
+        raise ValueError("No valid observation data could be loaded for any of the specified 'meas_usgs'.")
+    
+    # Concatenate the time series from all selected gauges column-wise -> (n_timesteps, n_gauges)
+    data_use_all_gauges = np.concatenate(all_data_use_cols, axis=1)
+    # Reshape the data into a single long vector for assimilation, matching the model output Y.
+    # This is done in a row-major fashion, e.g., [g1_t1, g2_t1, ..., g1_t2, g2_t2, ...]
+    data_use = data_use_all_gauges.reshape(-1, 1)
+    print(f"Final assimilation vector 'y' shape: {data_use.shape} (concatenated from {len(usgs_gauge_ids)} gauges)")
     
     data_plot, sav_ids = subsample_data(data_tmp, test_dict, sorted_link_ids, file_order)
     
-    col_idx_in_sav = np.where(sav_ids == usgs_to_link_id[usgs_gauge_id])[0]
-    print(f"Column index for observation gauge in .sav file: {col_idx_in_sav}")
+    # Find the column indices of the assimilation gauges within the model output files (whose columns are ordered by meas.sav)
+    assimilation_link_ids = [usgs_to_link_id[gid] for gid in usgs_gauge_ids if gid in usgs_to_link_id]
+    # Preserve the order from the config file, which is crucial for matching Y and y.
+    indices = [np.where(sav_ids == lid)[0][0] for lid in assimilation_link_ids if np.where(sav_ids == lid)[0].size > 0]
+    col_idx_in_sav = np.array(indices)
+
+    print(f"Column indices for assimilation gauges in model output files: {col_idx_in_sav}")
     
     return data_use, data_plot, sav_ids, col_idx_in_sav

@@ -9,7 +9,7 @@ from utils import get_ids, get_subwatershed
 from io_ifc import create_presim_gbl, create_presim_job_file, create_prm_from_division_params, create_prm_generation_job_file
 
 
-def _wait_for_files(file_paths: List[str], timeout: int = 1800, check_for_errors: bool = False, tmp_dir: str = None) -> List[np.ndarray]:
+def _wait_for_files(file_paths: List[str], timeout: int = 1800, check_for_errors: bool = False, tmp_dir: str = None, read_content: bool = True) -> List[np.ndarray]:
     """
     Waits for a list of files to exist, be non-empty, and have consistent sizes.
     Can also check for corresponding .error files.
@@ -49,10 +49,10 @@ def _wait_for_files(file_paths: List[str], timeout: int = 1800, check_for_errors
             time.sleep(10)
             continue
 
-        # For PRM generation, we only need to check for existence, not content.
-        if check_for_errors:
-            print(f"\n✅ All {num_files} files are ready after {elapsed} seconds.")
-            return None # Return None as we are not reading files here
+        # If we only need to check for existence, not content (e.g., for PRM generation)
+        if not read_content:
+            print(f"\n✅ All {num_files} files have appeared after {elapsed} seconds.")
+            return None
 
         read_values = []
         empty_indices = []
@@ -188,7 +188,7 @@ def run_hpc_prm_generation_ensemble(test_dict: dict, X_ensemble: np.ndarray, ens
 
     prm_files_to_check = [os.path.join(tmp_dir, f"{k}.prm") for k in range(ens)]
     try:
-        _wait_for_files(prm_files_to_check, timeout=600, check_for_errors=True, tmp_dir=tmp_dir)
+        _wait_for_files(prm_files_to_check, timeout=600, check_for_errors=True, tmp_dir=tmp_dir, read_content=False)
     except (TimeoutError, RuntimeError) as e:
         print(f"\n❌ Failed to generate all .prm files: {e}")
         sys.exit(1)
