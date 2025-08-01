@@ -473,8 +473,10 @@ def create_eki_run_job_file(test_dict, tmp_dir: str) -> None:
         # f.write('#$ -q AMCS\n')
         f.write('#$ -q IFC\n')
         f.write('#$ -cwd\n')
-        f.write(f'#$ -o "{tmp_dir}/$SGE_TASK_ID.out"\n')
-        f.write(f'#$ -e "{tmp_dir}/$SGE_TASK_ID.err"\n')
+        # f.write(f'#$ -o "{tmp_dir}/$SGE_TASK_ID.out"\n')
+        f.write('#$ -o /dev/null\n')
+        # f.write(f'#$ -o {tmp_dir}/$TASK_ID.out\n')    # $TASK_ID is a placeholder that qsub can replace when parsing the script;
+        f.write(f'#$ -e {tmp_dir}/$TASK_ID.err\n')      # but $SGE_TASK_ID only exists after the job has started.
         f.write('\n')
         f.write('/bin/echo Running on host: `hostname`.\n')
         f.write('/bin/echo In directory: `pwd`\n')
