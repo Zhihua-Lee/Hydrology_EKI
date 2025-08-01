@@ -85,6 +85,8 @@ def main(yaml_name, visualize_only=False):
         # A. Prepare State Vector (X).
         print("Initializing X_post as the initial latent variables....")
         X_post = create_latent(test_dict, division_to_link_map, ens) # (n_latent_params, n_divisions, n_ens)
+        # Get the dimensions of the parameter matrix once, as they are constant.
+        n_params, n_div, n_ens_members = X_post.shape
 
         # B. Prepare Observation Vector (y) and Error Covariance Diagonal (R).
         print("Preparing observation vector y and error covariance diagonal R...")
@@ -107,7 +109,7 @@ def main(yaml_name, visualize_only=False):
             test_dict, output_file_link_id_order, usgs_to_link_id, sorted_link_ids
         )  # assimilation_data(flattened): (n_gauges * t_steps,);   plotting_data: (t_steps, n_gauges)
         print("Saving initial measurement statistics...")
-        save_statistics_csv(test_dict, division_to_link_map, Y_mean=plotting_data, Y_std=None, X_mat=None, name='csv/' + "meas")
+        save_statistics_csv(test_dict, division_to_link_map, plotting_data, X_mat=None, name='csv/' + "meas")
 
         # Finalize y and R.
         y = np.reshape(assimilation_data,(-1,1)) # Reshape observation vector as: (n_gauges * t_steps, 1)
@@ -125,13 +127,12 @@ def main(yaml_name, visualize_only=False):
             run_hpc_prm_generation_ensemble(
                 test_dict, X_prior, ens, division_to_link_map.shape[0], link_to_division_map
             )
-            Y_prior, Y_plot_prior, Y_plot_mean, Y_plot_std  = run_hpc_simulation_ensemble(ens, X_prior, tmp_dir, col_idx_in_sav)
+            Y_prior, Y_plot_prior = run_hpc_simulation_ensemble(ens, X_prior, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_prior, Y_plot_prior, name='npy/' + str(i) + '_prior')
-            save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_prior, name='csv/' + str(i) + "_prior")
+            save_statistics_csv(test_dict, division_to_link_map, Y_plot_prior, X_prior, name='csv/' + str(i) + "_prior")
             
             # --- Posterior Step (Assimilation) ---
             # Reshape the 3D parameter array to 2D for the EnKF step
-            n_params, n_div, n_ens_members = X_prior.shape
             X_prior_flat = X_prior.reshape(n_params * n_div, n_ens_members)
             # Run the assimilation step
             X_post_flat = EnKF_step(y, X_prior_flat, Y_prior, R, test_dict, i)
@@ -141,9 +142,9 @@ def main(yaml_name, visualize_only=False):
             run_hpc_prm_generation_ensemble(
                 test_dict, X_post, ens, division_to_link_map.shape[0], link_to_division_map
             )
-            Y_post, Y_plot_post, Y_plot_mean, Y_plot_std = run_hpc_simulation_ensemble(ens, X_post, tmp_dir, col_idx_in_sav)
+            Y_post, Y_plot_post = run_hpc_simulation_ensemble(ens, X_post, tmp_dir, col_idx_in_sav)
             save_particles(test_dict, division_to_link_map, X_post, Y_plot_post, name='npy/' + str(i) + '_post')
-            save_statistics_csv(test_dict, division_to_link_map, Y_plot_mean, Y_plot_std, X_post, name='csv/' + str(i) + "_post")
+            save_statistics_csv(test_dict, division_to_link_map, Y_plot_post, X_post, name='csv/' + str(i) + "_post")
     else:
         # --- Precondition Check for visualize-only mode ---
         out_dir = test_dict['out_dir']

@@ -629,22 +629,30 @@ def create_test_initial_condition(test_dict: dict, id_list: list) -> None:
 # Output Data Saving
 # ==============================================================================
 
-def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_mean: np.ndarray, Y_std: np.ndarray = None, X_mat: np.ndarray = None, name: str = "results") -> None:
+def save_statistics_csv(test_dict: dict, division_to_link_map: np.ndarray, Y_data: np.ndarray, X_mat: np.ndarray = None, name: str = "results") -> None:
     """
     Save statistical results (mean, std) of model outputs (Y) and parameters (X) to CSV files.
+    This function can accept either a 3D particle array (and calculate stats) or a 2D pre-calculated mean array.
 
     Args:
         test_dict (dict): The main configuration dictionary.
         division_to_link_map (np.ndarray): A sparse matrix mapping divisions to links, used for parameter transformation.
                                            Shape: (n_divisions, n_links).
-        Y_mean (np.ndarray): The mean of the model output ensemble. Shape: (t_steps, n_links).
-        Y_std (np.ndarray, optional): The standard deviation of the model output ensemble. Shape: (t_steps, n_links).
+        Y_data (np.ndarray): The model output data. Can be the full ensemble (n_ens, t_steps, n_links)
+                             or a pre-calculated mean (t_steps, n_links).
         X_mat (np.ndarray, optional): The latent parameter ensemble. Shape: (n_latent_params, n_divisions, n_ens).
         name (str, optional): A prefix for the output filenames (e.g., '0_prior').
     """
     out_dir = test_dict["out_dir"]
     tmp_dir = test_dict["tmp_dir"]
     sav_name = os.path.join(tmp_dir, "meas.sav")
+
+    if Y_data.ndim == 3:  # Full particle set provided
+        Y_mean = np.mean(Y_data, axis=0)
+        Y_std = np.std(Y_data, axis=0)
+    else:  # Pre-calculated mean provided
+        Y_mean = Y_data
+        Y_std = None
 
     sav_val = np.genfromtxt(sav_name, delimiter=',', ndmin=1)
     title_y = sav_val.reshape(1, -1)

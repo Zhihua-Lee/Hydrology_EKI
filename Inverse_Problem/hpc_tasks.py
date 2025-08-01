@@ -188,11 +188,26 @@ def run_hpc_prm_generation_ensemble(test_dict: dict, X_ensemble: np.ndarray, ens
     os.remove(job_file_path)
     print("Finished generating .prm files.")
 
-def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tuple[np.ndarray]:
+def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Submits an HPC job array to run the IFC model simulation for an entire ensemble.
     It waits for all simulation outputs (.csv) and then processes them.
-    temporary directory, and measurement indices.
+
+    Args:
+        ens (int): The number of ensemble members.
+        X (np.ndarray): The parameter ensemble array. Used here for context but not direct calculation.
+        tmp_dir (str): The temporary directory where job files and intermediate outputs are stored.
+        idx_meas (np.ndarray): An array of column indices indicating which links correspond to measurement locations.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: A tuple containing two arrays:
+        
+        - Y (np.ndarray): The processed simulation output array, prepared for the data assimilation step (EnKF).
+                          It contains only the data from the measurement locations (`idx_meas`) and is flattened.
+                          Shape: `(n_timesteps * n_gauges, n_ensembles)`.
+        - Y_plot (np.ndarray): The raw, complete simulation output from all ensemble members for all links specified
+                               in the run's `meas.sav` file. This is used for plotting and saving the full particle state.
+                               Shape: `(n_ensembles, n_timesteps, n_links)`.
     """
     job_cmd = f"qsub -t 1-{ens} {os.path.join(tmp_dir, 'submit_job.job')}"
     os.system(job_cmd)
@@ -207,12 +222,9 @@ def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas:
     read_values_fixed = [res[:, :-1] for res in read_values]
     read_values_measured = [res[:, idx_meas] for res in read_values_fixed]
     Y = np.concatenate([np.reshape(rm, (-1, 1)) for rm in read_values_measured], axis=1)
-    
-    Y_plot_mean = np.mean(np.array(read_values_fixed), axis=0)
-    Y_plot_std = np.std(np.array(read_values_fixed), axis=0)
     Y_plot = np.array(read_values_fixed)
     for csv_path in csv_paths:
         if os.path.isfile(csv_path):
             os.remove(csv_path)
     
-    return Y, Y_plot, Y_plot_mean, Y_plot_std
+    return Y, Y_plot
