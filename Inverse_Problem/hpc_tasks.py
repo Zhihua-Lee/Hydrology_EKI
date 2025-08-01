@@ -23,13 +23,23 @@ def _wait_for_files(file_paths: List[str], timeout: int = 1800, check_for_errors
             raise TimeoutError(f"Timeout ({timeout}s) exceeded while waiting for files.")
 
         if check_for_errors and tmp_dir:
-            error_files = [f for f in os.listdir(tmp_dir) if f.endswith('.error')]
-            if error_files:
+            # Check for errors from Python workers (e.g., PRM generation)
+            worker_error_files = [f for f in os.listdir(tmp_dir) if f.endswith('.error')]
+            if worker_error_files:
                 error_msgs = []
-                for err_file in error_files:
+                for err_file in worker_error_files:
                     with open(os.path.join(tmp_dir, err_file), 'r') as f:
                         error_msgs.append(f"Error in {err_file}: {f.read()}")
                 raise RuntimeError("Errors detected in worker processes:\n" + "\n".join(error_msgs))
+
+            # Check for errors from SGE jobs (non-empty .err files)
+            sge_error_files = [f for f in os.listdir(tmp_dir) if f.endswith('.err') and os.path.getsize(os.path.join(tmp_dir, f)) > 0]
+            if sge_error_files:
+                error_msgs = []
+                for err_file in sge_error_files:
+                    with open(os.path.join(tmp_dir, err_file), 'r') as f:
+                        error_msgs.append(f"Error in SGE job (see {err_file}):\n---\n{f.read()}\n---")
+                raise RuntimeError("Errors detected in SGE jobs:\n" + "\n".join(error_msgs))
 
         missing_indices = [i for i, p in enumerate(file_paths) if not os.path.isfile(p)]
         if missing_indices:
@@ -214,7 +224,7 @@ def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas:
     
     csv_paths = [os.path.join(tmp_dir, f"{j}.csv") for j in range(ens)]
     try:
-        read_values = _wait_for_files(csv_paths, timeout=1800)
+        read_values = _wait_for_files(csv_paths, timeout=1800, check_for_errors=True, tmp_dir=tmp_dir)
     except (TimeoutError, RuntimeError) as e:
         print(f"\n❌ {e}")
         sys.exit(1)
@@ -223,8 +233,14 @@ def run_hpc_simulation_ensemble(ens: int, X: np.ndarray, tmp_dir: str, idx_meas:
     read_values_measured = [res[:, idx_meas] for res in read_values_fixed]
     Y = np.concatenate([np.reshape(rm, (-1, 1)) for rm in read_values_measured], axis=1)
     Y_plot = np.array(read_values_fixed)
-    for csv_path in csv_paths:
-        if os.path.isfile(csv_path):
-            os.remove(csv_path)
+    
+    # Cleanup intermediate files from the simulation job array
+    for j in range(ens):
+        # SGE task IDs are 1-based, our ensemble/file IDs are 0-based
+        sge_task_id = j + 1
+        for suffix in [f'{j}.csv', f'{sge_task_id}.out', f'{sge_task_id}.err']:
+            file_to_remove = os.path.join(tmp_dir, suffix)
+            if os.path.isfile(file_to_remove):
+                os.remove(file_to_remove)
     
     return Y, Y_plot

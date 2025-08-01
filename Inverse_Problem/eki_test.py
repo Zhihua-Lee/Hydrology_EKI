@@ -11,7 +11,6 @@ from io_ifc import create_meas_sav, create_test_initial_condition, create_ensemb
 from eki import subsample_data, perturb_ensemble, EnKF_step
 from latent import create_latent, transform_latent_to_physical
 from hpc_tasks import run_hpc_presimulation_for_synthetic_data, run_hpc_prm_generation_ensemble, run_hpc_simulation_ensemble
-from io_ifc import create_meas_sav, create_test_initial_condition, create_ensemble_gbl, create_eki_run_job_file, save_statistics_csv, save_particles
 from ifc_usgs_fileorder import load_usgs_mapping
 
 import pandas as pd

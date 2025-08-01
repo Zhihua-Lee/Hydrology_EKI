@@ -1127,7 +1127,7 @@ def main_visualization(test_dict):
         file_path = os.path.join(test_dict['out_dir'], f'npy/{i-1}_post_params_particles.npy') if i > 0 else os.path.join(test_dict['out_dir'], 'npy/0_prior_params_particles.npy')
         with open(file_path, 'rb') as f:
             post_param_list.append(np.load(f))
-    post_param_array = np.stack(post_param_list, axis=0).reshape(num_assimilation_steps + 1, len(active_param_indices), -1, post_param_list[0].shape[-1])
+    post_param_array = np.stack(post_param_list, axis=0)
     iter_range_post = np.arange(0, num_assimilation_steps + 1)
 
     # --- Generate Maps (as they are independent of prior/post phase) ---
@@ -1157,7 +1157,7 @@ def main_visualization(test_dict):
         file_path = os.path.join(test_dict['out_dir'], f'npy/{i}_prior_params_particles.npy')
         with open(file_path, 'rb') as f:
             prior_param_list.append(np.load(f))
-    prior_param_array = np.stack(prior_param_list, axis=0).reshape(num_assimilation_steps, len(active_param_indices), -1, prior_param_list[0].shape[-1])
+    prior_param_array = np.stack(prior_param_list, axis=0)
     iter_range_prior = np.arange(0, num_assimilation_steps)
 
     print("\n--- Generating Prior-Assimilation Visualizations ---")

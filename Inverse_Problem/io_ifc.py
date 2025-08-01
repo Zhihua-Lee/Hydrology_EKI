@@ -473,8 +473,8 @@ def create_eki_run_job_file(test_dict, tmp_dir: str) -> None:
         # f.write('#$ -q AMCS\n')
         f.write('#$ -q IFC\n')
         f.write('#$ -cwd\n')
-        f.write('#$ -o /dev/null\n')
-        f.write('#$ -e /dev/null\n')
+        f.write(f'#$ -o {tmp_dir}/$SGE_TASK_ID.out\n')
+        f.write(f'#$ -e {tmp_dir}/$SGE_TASK_ID.err\n')
         f.write('\n')
         f.write('/bin/echo Running on host: `hostname`.\n')
         f.write('/bin/echo In directory: `pwd`\n')
@@ -488,7 +488,7 @@ def create_eki_run_job_file(test_dict, tmp_dir: str) -> None:
         f.write('mkdir -p "$scratch_path"\n')
         project_root = test_dict['project_root']
         executable_path = os.path.join(project_root, 'exec/asynch/bin/asynch')
-        f.write(f'mpirun -np {num_parallel_slots} {executable_path} ' + tmp_dir + '$ensemble_id.gbl\n')
+        f.write(f'mpirun -np {num_parallel_slots} {executable_path} {tmp_dir}/$ensemble_id.gbl\n')
         f.write('rm -r "$scratch_path"\n')
         # hpchome/executables/asynch/bin/asynch
 
