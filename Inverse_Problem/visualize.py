@@ -34,8 +34,7 @@ from adjustText import adjust_text
 
 import geopandas as gpd
 
-from data_handler import load_usgs_mapping_from_path, get_subwatershed, get_ids
-from io_ifc import get_rainfall_for_lid_from_config
+from data_handler import load_usgs_mapping_from_path, get_subwatershed, get_ids, get_rainfall_for_lid_from_config
 from metric_operator import find_events, find_metric_values
 
 # Global matplotlib settings
@@ -738,7 +737,7 @@ def generate_hydrograph_metric_map(assimilation_phase, visual_output_dir, out_di
     # Ensure they are all strings and stripped
     assimilation_gauge_ids = [str(g).strip() for g in assimilation_gauge_ids]
 
-    most_downstream_gauge_id = str('05583000').strip() # As per reference catchment_maps.py
+    most_downstream_gauge_id = str(test_dict['visualization_settings']['downstream_outlet_usgs_id']).strip()
 
     # --- Fetch gauge coordinates ---
     gauge_data_list = []

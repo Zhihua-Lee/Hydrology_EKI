@@ -5,7 +5,145 @@ import numpy as np
 import os
 import pandas as pd
 
+import struct
+import re # Import regex module for year matching
+
 #TODO: convert this into something that can be stored in a seperate file, so that it can be generalized
+
+# ==============================================================================
+# Utility Functions
+# ==============================================================================
+
+def get_rainfall_for_lid_from_config(target_lid, start_time_str, end_time_str, rain_dir):
+    """
+    Parses binary rainfall files to get data for a target LID within a time window.
+    Handles both hierarchical (rain_dir/YYYY/file) and flat (rain_dir/file) structures.
+
+    Parameters:
+        target_lid (int): The Link ID (LID) to extract rainfall data for.
+        start_time_str (str): Start time string (YYYY-MM-DD HH:MM or similar).
+        end_time_str (str): End time string (YYYY-MM-DD HH:MM or similar).
+        rain_dir (str): Base directory containing the rainfall data.
+
+    Returns:
+        pd.DataFrame: DataFrame with 'Time' index and 'Rainfall' column (mm/h).
+                      Returns an empty DataFrame if no data is found or rain_dir is invalid.
+    """
+    rainfall_data = []
+    if not os.path.isdir(rain_dir):
+        print(f"Warning: Rainfall directory not found or invalid: {rain_dir}") # Keep important warnings
+        return pd.DataFrame(rainfall_data, columns=["Time", "Rainfall"]).set_index("Time")
+
+    try:
+        start_time = pd.to_datetime(start_time_str)
+        end_time = pd.to_datetime(end_time_str)
+    except ValueError as e:
+        print(f"Error: Could not parse start/end time strings: {e}") # Keep important errors
+        return pd.DataFrame(rainfall_data, columns=["Time", "Rainfall"]).set_index("Time")
+
+    # --- Detect directory structure ---
+    dirs_to_scan = []
+    potential_year_dirs = []
+    for item in os.listdir(rain_dir):
+        item_path = os.path.join(rain_dir, item)
+        if os.path.isdir(item_path) and re.fullmatch(r'(19|20)\d{2}', item):
+            potential_year_dirs.append(item_path)
+
+    years_in_range_set = {str(y) for y in range(start_time.year, end_time.year + 1)}
+    relevant_year_dirs = [p for p in potential_year_dirs if os.path.basename(p) in years_in_range_set]
+
+    if relevant_year_dirs:
+        # Use hierarchical structure
+        dirs_to_scan = relevant_year_dirs
+    else:
+        # Use flat structure
+        dirs_to_scan = [rain_dir]
+    # --- End Structure Detection ---
+
+    found_any_data = False
+
+    # --- Scan Directories and Process Files ---
+    for data_dir in dirs_to_scan:
+        try:
+            files_in_dir = [
+                f for f in os.listdir(data_dir)
+                if os.path.isfile(os.path.join(data_dir, f)) and f.isdigit()
+            ]
+            files = sorted(files_in_dir)
+        except OSError as e:
+            print(f"Warning: Could not list files in {data_dir}: {e}") # Keep important warnings
+            continue
+
+        if not files:
+            continue
+
+        for file in files:
+            try:
+                timestamp_s = int(file)
+                timestamp = pd.to_datetime(timestamp_s, unit="s")
+
+                # Efficiently skip files outside the primary time range
+                if timestamp > end_time:
+                    continue
+                if timestamp < start_time:
+                    continue
+
+                # Process file if within range
+                file_path = os.path.join(data_dir, file)
+                with open(file_path, "rb") as f:
+                    raw_data = f.read()
+
+                if len(raw_data) < 8:
+                    # print(f"Warning: Skipping potentially corrupt file (size < 8 bytes): {file_path}") # Keep warnings
+                    continue
+
+                raw_data = raw_data[4:]
+
+                rainfall_value = 0.0
+                found_lid = False
+                try:
+                    for lid, rainfall in struct.iter_unpack("if", raw_data):
+                        if lid == target_lid:
+                            rainfall_value = rainfall
+                            found_lid = True
+                            break
+                except struct.error as se:
+                     print(f"Warning: Struct unpacking error in file {file_path}: {se}. Skipping file.") # Keep warnings
+                     continue
+
+                rainfall_data.append((timestamp, rainfall_value))
+                found_any_data = True
+
+            except ValueError:
+                # Warning for non-integer filenames (though isdigit should prevent this)
+                print(f"Warning: Could not parse filename to int: {file} in {data_dir}") # Keep warnings
+            except MemoryError:
+                 print(f"Error: MemoryError reading file {file_path}. Skipping file.") # Keep errors
+            except OSError as e:
+                 print(f"Error: OSError reading file {file_path}: {e}. Skipping file.") # Keep errors
+            except Exception as e:
+                print(f"Error processing file {os.path.join(data_dir, file)}: {type(e).__name__} - {e}") # Keep errors
+
+    # --- Final DataFrame Creation ---
+    if not found_any_data:
+        # No need to print if empty, function will just return empty DF
+        return pd.DataFrame(columns=["Time", "Rainfall"]).set_index("Time")
+
+    try:
+        rainfall_df = pd.DataFrame(rainfall_data, columns=["Time", "Rainfall"])
+        if not rainfall_df.empty:
+            rainfall_df.set_index("Time", inplace=True)
+            rainfall_df = rainfall_df.sort_index()
+            rainfall_df = rainfall_df[~rainfall_df.index.duplicated(keep='first')]
+            rainfall_df = rainfall_df.loc[start_time:end_time] # Precise final filtering
+        else:
+             return pd.DataFrame(columns=["Time", "Rainfall"]).set_index("Time")
+
+    except Exception as e:
+        print(f"Error creating/processing final DataFrame: {e}") # Keep errors
+        return pd.DataFrame(columns=["Time", "Rainfall"]).set_index("Time")
+
+    return rainfall_df
 
 def load_usgs_mapping(test_dict: dict) -> Tuple[Dict[str, int], Dict[int, str], np.ndarray]:
     """
