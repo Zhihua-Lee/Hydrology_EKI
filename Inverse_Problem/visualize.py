@@ -34,7 +34,7 @@ from adjustText import adjust_text
 
 import geopandas as gpd
 
-from data_handler import load_usgs_mapping_from_path, get_subwatershed, get_ids, get_rainfall_for_lid_from_config
+from data_handler import load_usgs_mapping_from_path, get_subwatershed, get_ids, get_rainfall_for_lids, load_and_aggregate_rainfall_by_division
 from metric_operator import find_events, find_metric_values
 
 # Global matplotlib settings
@@ -42,7 +42,6 @@ plt.rcParams['font.size'] = 12
 plt.rcParams['mathtext.fontset'] = 'cm'
 plt.rcParams['font.family'] = 'STIXGeneral'
 
-# ------------------ Utility: Clear and Create Directory ------------------
 def clear_and_create_dir(dir_path):
     """If the directory exists, remove it entirely and then create a new one."""
     if os.path.exists(dir_path):
@@ -194,6 +193,13 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, plo
     clear_and_create_dir(hydrograph_frames_dir)
     clear_and_create_dir(hydrograph_anim_dir)
     
+    # Efficiently load rainfall data for all necessary links at once
+    lids_for_hydrographs = set(plot_link_ids)
+    print("\n--- Loading all rainfall data for hydrograph visualization ---")
+    all_rain_data = get_rainfall_for_lids(
+        lids_for_hydrographs, start_time_str, end_time_str, rain_dir
+    )
+
     print(f"\n--- Generating {assimilation_phase.title()} Hydrograph Animations ---")
     iter_range = range(num_iters + 1) if assimilation_phase == 'post' else range(num_iters)
 
@@ -202,7 +208,8 @@ def generate_hydrograph_animation(num_iters, station_indices, station_names, plo
         station_label = station_names[i]
         target_lid = plot_link_ids[i]
 
-        rain_df = get_rainfall_for_lid_from_config(target_lid, start_time_str, end_time_str, rain_dir)
+        # Fast dictionary lookup; no more file I/O inside the loop.
+        rain_df = all_rain_data.get(target_lid, pd.DataFrame())
 
         cr_ref_for_station = None
         if using_simulated_data and cr_ref_vec is not None and link_to_division_map is not None:
@@ -915,73 +922,6 @@ def generate_hydrograph_metric_map(assimilation_phase, visual_output_dir, out_di
     plt.savefig(output_path, dpi=150)
     plt.close(fig)
     print(f"Saved hydrograph metric map to {output_path}")
-
-
-def load_and_aggregate_rainfall_by_division(start_time_str, end_time_str, rain_dir, link_to_division_map):
-    """
-    Efficiently loads all rainfall data within a time window and aggregates it by sub-watershed division.
-    This function reads each binary rainfall file only once.
-    """
-    if not os.path.isdir(rain_dir):
-        print(f"Warning: Rainfall directory not found: {rain_dir}")
-        return {}
-
-    try:
-        start_time = pd.to_datetime(start_time_str)
-        end_time = pd.to_datetime(end_time_str)
-    except ValueError as e:
-        print(f"Error: Could not parse start/end time strings: {e}")
-        return {}
-
-    duration_hours = (end_time - start_time).total_seconds() / 3600.0
-    if duration_hours <= 0:
-        print(f"Warning: Time duration is non-positive ({duration_hours} hours). Cannot calculate average rate.")
-        # Return total accumulation instead of a meaningless rate
-        duration_hours = 1 
-
-    # --- Find all relevant rainfall files ---
-    files_to_process = []
-    years_in_range = {str(y) for y in range(start_time.year, end_time.year + 1)}
-    
-    # Check for yearly subdirectories
-    potential_year_dirs = [os.path.join(rain_dir, item) for item in os.listdir(rain_dir) if os.path.isdir(os.path.join(rain_dir, item)) and re.fullmatch(r'(19|20)\d{2}', item)]
-    
-    dirs_to_scan = [p for p in potential_year_dirs if os.path.basename(p) in years_in_range]
-    if not dirs_to_scan:
-        dirs_to_scan = [rain_dir] # Fallback to flat structure
-
-    for data_dir in dirs_to_scan:
-        for filename in os.listdir(data_dir):
-            if filename.isdigit():
-                timestamp = pd.to_datetime(int(filename), unit='s')
-                if start_time <= timestamp <= end_time:
-                    files_to_process.append(os.path.join(data_dir, filename))
-
-    if not files_to_process:
-        print("Warning: No rainfall files found in the specified time range.")
-        return {}
-
-    # --- Process files and aggregate rainfall ---
-    num_divisions = max(link_to_division_map.values()) + 1
-    division_rainfall_totals = np.zeros(num_divisions)
-    
-    print("Aggregating rainfall data by division...")
-    for file_path in tqdm(files_to_process):
-        try:
-            with open(file_path, "rb") as f:
-                raw_data = f.read()
-            
-            if len(raw_data) < 8: continue
-            raw_data = raw_data[4:] # Skip 4-byte header
-
-            for lid, rainfall in struct.iter_unpack("if", raw_data):
-                division_id = link_to_division_map.get(lid)
-                if division_id is not None:
-                    division_rainfall_totals[division_id] += rainfall
-        except Exception as e:
-            print(f"Warning: Could not process file {file_path}. Error: {e}")
-            
-    return {i: total / duration_hours for i, total in enumerate(division_rainfall_totals) if total > 0}
 
 
 def generate_rainfall_map(visual_output_dir, test_dict, model_link_ids, link_to_division_map):
