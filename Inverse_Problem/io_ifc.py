@@ -2,15 +2,14 @@ import numpy as np
 import pandas as pd
 from latent import transform_latent_to_physical
 from typing import List, Dict
-from utils import time_to_epoch, get_ids, get_subwatershed # <-- Add get_ids and get_subwatershed
+from utils import time_to_epoch
+from data_handler import get_ids, get_subwatershed, load_usgs_mapping
 
 from string import Template
 import shutil
 
 import os
 from textwrap import dedent
-
-from ifc_usgs_fileorder import load_usgs_mapping
 
 import struct
 import re # Import regex module for year matching
@@ -521,11 +520,11 @@ def create_meas_sav(test_dict: dict, model_link_ids: list) -> None:
     new_lines = []
     for gauge_id in sav_lines:
         if gauge_id in usgs_to_link_id: #check if in the converting dictionary keys
-            mapped_link_id = usgs_to_link_id[gauge_id]  # 例如得到整数形式的模型 link id
+            mapped_link_id = usgs_to_link_id[gauge_id]  # e.g., get the integer model link id
             if mapped_link_id in model_link_ids:
                 new_lines.append(str(mapped_link_id))
         else:
-            # 可选：打印警告信息，表明某个 gauge_id 没有在映射中找到
+            # Optional: Print a warning that a gauge_id was not found in the mapping.
             print(f"Warning: Gauge ID {gauge_id} not found in USGS mapping.")
 
     # Write the filtered lines to a new SAV file

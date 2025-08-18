@@ -33,11 +33,10 @@ from adjustText import adjust_text
 
 
 import geopandas as gpd
-from utils import get_subwatershed, get_ids
 
-from ifc_usgs_fileorder import load_usgs_mapping_from_path
+from data_handler import load_usgs_mapping_from_path, get_subwatershed, get_ids
 from io_ifc import get_rainfall_for_lid_from_config
-from eki import find_events, find_metric_values
+from metric_operator import find_events, find_metric_values
 
 # Global matplotlib settings
 plt.rcParams['font.size'] = 12

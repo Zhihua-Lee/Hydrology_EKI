@@ -5,7 +5,7 @@ import pickle
 from typing import List, Tuple, Dict
 
 # Import dependencies for the HPC task functions
-from utils import get_ids, get_subwatershed
+from data_handler import get_ids, get_subwatershed
 from io_ifc import create_presim_gbl, create_presim_job_file, create_prm_from_division_params, create_prm_generation_job_file
 
 

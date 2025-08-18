@@ -66,10 +66,10 @@ def unbounded_to_bounded(x: np.ndarray, lb: float, ub: float) -> np.ndarray:
     # Scale and shift the values to the desired bounded range [lb, ub]
     res = lb + (x_on_0_1) * (ub - lb)
 
-    # 检查是否出现 NaN
+    # Check for NaN occurrences
     if np.isnan(res).any():
         print(f"Warning: NaN found in unbounded_to_bounded for lb={lb}, ub={ub}!")
-        # 可选：你也可以在此处对 NaN 进行填补或截断
+        # Optional: You could also fill or clip NaN values here
 
     return res
 

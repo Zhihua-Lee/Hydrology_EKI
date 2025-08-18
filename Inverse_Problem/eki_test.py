@@ -6,18 +6,33 @@ import os, time
 import argparse
 
 from tqdm import tqdm
-from utils import process_yaml, get_ids, get_subwatershed, load_and_process_observations
+from utils import process_yaml
+from data_handler import load_usgs_mapping, get_ids, get_subwatershed, load_and_process_observations, subsample_data
 from io_ifc import create_meas_sav, create_test_initial_condition, create_ensemble_gbl, create_eki_run_job_file, save_statistics_csv, save_particles
-from eki import subsample_data, perturb_ensemble, EnKF_step
+from eki import perturb_ensemble, EnKF_step
 from latent import create_latent, transform_latent_to_physical
 from hpc_tasks import run_hpc_presimulation_for_synthetic_data, run_hpc_prm_generation_ensemble, run_hpc_simulation_ensemble
-from ifc_usgs_fileorder import load_usgs_mapping
+
 
 import pandas as pd
 
 import visualize
 
-def main(yaml_name, visualize_only=False):
+def main(yaml_name: str, visualize_only: bool = False) -> None:
+    """
+    The main driver for the Ensemble Kalman Inversion (EKI) workflow.
+
+    This function orchestrates the entire process, including setup, EKI iterations,
+    and final visualization. It can be run in two modes:
+    1. Full run: Executes the entire EKI workflow from start to finish.
+    2. Visualize-only: Skips the EKI computation and generates visualizations
+       from pre-existing output data.
+
+    Args:
+        yaml_name (str): The path to the YAML configuration file for the experiment.
+        visualize_only (bool, optional): If True, skips the main EKI loop and
+            proceeds directly to the visualization step. Defaults to False.
+    """
     # --- 1. Configuration and Setup ---
     # Load experiment settings from the specified YAML file.
     test_dict = process_yaml(yaml_name)
