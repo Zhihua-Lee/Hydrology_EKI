@@ -72,7 +72,7 @@ def main(yaml_name: str, visualize_only: bool = False) -> None:
         usgs_to_link_id, link_to_usgs_id, output_file_link_id_order = load_usgs_mapping(test_dict)
         sorted_link_ids = get_ids(test_dict) # The authoritative source for sorted link IDs.
         
-        if test_dict['watershed_csv'] is None:
+        if not test_dict.get('watershed_csv'):
             print("No watershed division file provided. Assuming a single global parameter set.")
             # The map should represent one division containing all links.
             # Its shape must be (n_divisions, n_links), which is (1, n_links).

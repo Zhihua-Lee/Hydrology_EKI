@@ -220,20 +220,20 @@ def get_ids(test_dict: dict) -> List[int]:
     This version is more robust against formatting errors in the ID lines.
     """
     prm_name = test_dict['prm']
-    with open(prm_name, 'r') as f:
-        prm_lines = [line for line in f.readlines() if line.strip()]
-    
     id_list_prm = []
-    # The lines with IDs should be at indices 1, 3, 5, ...
-    for line in prm_lines[1::2]:
-        try:
-            # Split the line by spaces and try to convert the first element to an integer
-            first_element = line.strip().split()[0]
-            id_list_prm.append(int(first_element))
-        except (ValueError, IndexError) as e:
-            # Handle cases where the line is empty, not a number, or has other issues
-            print(f"Warning: Could not parse an ID from line: '{line.strip()}'. Skipping. Error: {e}")
-            
+    with open(prm_name, 'r') as f:
+        next(f)  # Skip the header line
+        line_count = 1
+        for line in f:
+            line_count += 1
+            # The lines with IDs are the even-numbered lines after the header
+            if line_count % 2 == 0:
+                try:
+                    first_element = line.strip().split()[0]
+                    id_list_prm.append(int(first_element))
+                except (ValueError, IndexError) as e:
+                    print(f"Warning: Could not parse an ID from line: '{line.strip()}'. Skipping. Error: {e}")
+    
     id_list = np.sort(id_list_prm)
     return id_list
 
