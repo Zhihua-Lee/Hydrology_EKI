@@ -1,0 +1,2 @@
+Latent transformation of alpha not implemented: Now there negative alpha values;
+First few steps of the DA are good, which means the DA can start to correct alphas in one day(probably shorter);

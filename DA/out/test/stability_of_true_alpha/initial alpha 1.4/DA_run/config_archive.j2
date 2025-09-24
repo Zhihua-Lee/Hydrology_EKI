@@ -1,0 +1,147 @@
+# DA/config.j2
+
+###################################################
+#                 Section: Project & HPC
+###################################################
+# The root directory of the login node (or the main program runtime environment)
+login_node_root: "/Users/zli333/DA/2025_EKI"
+# Root directory of the compute node (Worker execution environment)
+compute_node_root: "/old_Users/zli333/DA/2025_EKI"
+hpc_python_path: "/Users/zli333/virtenvs/Hydro_py3108/bin/python" # Note: Ensure this path is valid on compute nodes
+random_seed: 42
+
+###################################################
+#                 Section: Logging
+###################################################
+logging:
+  debug_mode: false 
+  # Set to false(true) to suppress(enable) detailed debugging print statements
+
+###################################################
+#                 Section: DA Settings
+###################################################
+da_settings:
+  num_ensembles: 100
+  # --- Twin Experiment Settings ---
+  using_simulated_data: true
+  synthetic_obs_path: "out/DA_run/csv/synthetic_observations.csv"
+
+  # Time window for the entire data assimilation run
+  assimilation_window:
+    start: "2021-08-01 00:00"
+    end: "2021-08-01 23:00"
+    {# end: "2021-09-01 12:00" #}
+
+  # --- Process Noise (Q) Settings ---
+  # Std dev of the alpha parameter random walk. Represents uncertainty in how alpha evolves. 
+  alpha_process_noise_std: 0.2
+  # Std dev for the physical state multiplicative noise. Represents uncertainty/error in the HLM model itself.
+  physical_state_process_noise_std: 0.02
+
+  # Maximum history length for the augmented state parameter component (N_max)
+  max_param_history: 50
+
+  # Variance for the real-time observation y_t
+  real_time_obs_error_var: 0.1 #10.0
+
+  # A single variance value to be used for all historical/smoother observations
+  smoother_obs_error_var: 0.1 #15.0
+
+###################################################
+#                 Section: Parameters
+###################################################
+parameters:
+  # Used if generating simulated data to serve as "truth"
+  truth_alpha_value: 1.5 
+  
+  # Mean and std for initializing the parameter ensemble at t=0
+  {# initial_mean: 1.0 #}
+  initial_mean: 1.4
+  initial_std: 0.2
+  
+  # This list MUST match the order of parameters in your template .prm file.
+  # HLMRunner uses this to find the correct column index for '$Cr$'.
+  prm_names: [
+    "parameter0", "parameter1", "parameter2", "parameter3", "parameter4",
+    "parameter5", "parameter6", "parameter7", "parameter8", "parameter9",
+    "parameter10", "parameter11", "$Cr$"]
+
+###################################################
+#                 Section: HLM Model & Data
+###################################################
+hlm_model:
+  model_num: '602'
+  
+  # Paths to model structure and forcing data
+  rain_dir: hlm_data/Sensor_data/Rainfall_Sangamon_river/MRMS/2021/
+  rvr: hlm_data/structure/sangamon.rvr
+  prm: hlm_data/parameter_templates/sangamon_v6.prm
+  evapo: hlm_data/Sensor_data/Temp&Evap_monthly/modis_2021.mon
+  temp: hlm_data/Sensor_data/Temp&Evap_monthly/temperature.mon
+  initial_uini: hlm_data/Sensor_data/initial602.uini
+
+  # For watershed-based parameters (can be commented out to run with a single global parameter)
+  watershed_csv: hlm_data/structure/watershed_division_by_filtered_joints.csv
+  watershed_depth: 7
+
+  # HPC settings for model runs
+  parallel_argument: smp
+  num_parallel_slots: 6
+  scratch_dir: "/nfsscratch/Users/zli333/test_da"
+  # --- Specialized HPC settings for the single, large presimulation run ---
+  presim_hpc_settings:
+    num_parallel_slots: 112
+    memory_request: "16G"
+
+  # HLM physical state vector (.rec file) has 5 components per link:
+  # [discharge, ponded_water, topsoil, subsurface_storage, snow_melt]
+  # This DA system only updates the first component (discharge). The other four
+  # are held constant using the values defined below. This list directly corresponds
+  # to components 2 through 5.
+  constant_physical_states: [0.0, 0.05, 0.3, 0.0]
+
+###################################################
+#               Section: Observations
+###################################################
+observations:
+  # The primary gauge(s) providing the real-time observation y_t for assimilation
+  {# real_time_usgs_gauges: ["5583000"] #}
+  real_time_usgs_gauges: [                              
+    "5578100", "5578000", "5579630", "5576500", "5580950", "5577500", "5576250",
+    "5576000", "5580000", "5582000", "5576193", "5570910", "5583000", "5578250", "5576090",
+    "5573540", "5578500", "5579725", "5579500", "5572000"
+  ]
+
+  # Mapping files and data sources
+  usgs_csv: hlm_data/structure/usgs_gauges_linked.csv
+  meas_series: hlm_data/Sensor_data/usgs_hydrograph_all_time.csv
+  meas_sav: hlm_data/structure/gauges.sav # Source SAV file with USGS IDs, used for filtering
+  link_sav: hlm_data/structure/sangamon.sav # Defines link order in model output files
+
+###################################################
+#               Section: Visualization
+###################################################
+visualization:
+  # Path to the shapefile for map visualization
+  shapefile_path: ../sangamon/link_maps/network.shp
+  # ID of the gauge at the most downstream point for map highlighting
+  downstream_outlet_usgs_id: "05583000"
+  # List of all gauge IDs you want to appear in plots and maps
+  plot_usgs: [                              
+    "5578100", "5578000", "5579630", "5576500", "5580950", "5577500", "5576250",
+    "5576000", "5580000", "5582000", "5576193", "5570910", "5583000", "5578250", "5576090",
+    "5573540", "5578500", "5579725", "5579500", "5572000"
+  ]
+  # Parameters for event statistics visualization (if used)
+  event_finding:
+    min_dist: 24      # Minimum distance (hours) between peaks
+    min_thresh_pct: 25 # Threshold for event detection as a percentile
+    min_length: 72    # Minimum duration (hours) for an event
+
+###################################################
+#               Section: Paths
+###################################################
+paths:
+  # Directories for DA framework outputs
+  out_dir: out/DA_run
+  tmp_dir: tmp/DA_run

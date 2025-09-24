@@ -1,0 +1,2 @@
+The alpha not correcting, since the forward operator is not sensitive to the rain scaling.
+It is strange because from the visualization of the rainfall, there is rain nearby the outlet gauge.
