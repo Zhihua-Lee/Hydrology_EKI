@@ -7,6 +7,8 @@ import pickle
 
 # This worker needs access to the file creation utilities
 from io_ifc import create_prm_from_division_params, write_rec_file
+# +++ NEW: Import the transformation function +++
+from latent import transform_latent_to_physical
 
 def main():
     """
@@ -39,7 +41,8 @@ def main():
         constant_states = shared_data['constant_states']
         
         q_discharge = q_ensemble[member_id]
-        alpha_param = alpha_ensemble[member_id]
+        # alpha_ensemble for one member has shape (n_divisions,)
+        latent_alpha_vector = alpha_ensemble[member_id]
 
     except Exception as e:
         sys.exit(f"Error loading data for member {member_id}: {e}")
@@ -50,9 +53,27 @@ def main():
     try:
         # 1. CREATE THE .prm FILE
         prm_path = os.path.join(run_dir, "params.prm")
-        cr_params = np.full((1, n_divisions), alpha_param)
+
+        # +++ NEW: Transform latent alpha vector to physical alpha vector +++
+        # The worker receives a latent alpha vector for all divisions.
+        # We need to find the active parameter indices from the config.
+        prm_dist_bool = [str(val).lower() == 'true' for val in config['parameters']["prm_dist"]]
+        active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
+
+        # Reshape the latent vector into the 2D shape expected by the transformer
+        # Shape: (n_divisions,) -> (1, n_divisions) for one active parameter
+        latent_alpha_2d = latent_alpha_vector.reshape(1, -1)
+        
+        # Perform the transformation.
+        physical_alpha_2d = transform_latent_to_physical(
+            config['parameters'],
+            latent_alpha_2d, # Shape: (n_active_params, n_divisions)
+            n_divisions=n_divisions,
+            active_param_indices=active_param_indices
+        )
+
         create_prm_from_division_params(
-            config['hlm_model'], link_to_division_map, cr_params, [cr_param_index], prm_path
+            config['hlm_model'], link_to_division_map, physical_alpha_2d, active_param_indices, prm_path
         )
         
         # 2. CREATE THE .rec FILE

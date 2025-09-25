@@ -8,6 +8,8 @@ from typing import List
 
 from scipy.sparse import coo_matrix
 from io_ifc import get_ids, get_subwatershed, create_prm_from_division_params, _create_single_gbl, load_usgs_mapping, parse_rec_file, write_rec_file
+# +++ NEW: Import the transformation function +++
+from latent import transform_latent_to_physical
 
 class HLMRunner:
     def __init__(self, config: dict):
@@ -133,10 +135,12 @@ class HLMRunner:
             # Each step uses the output of the previous step as its input.
 
             # --- DETAILED DEBUGGING ---
-            print(f"  [Worker] Window Sim Step {i}: Start Time={current_time}, Alpha={alpha:.4f}")
-            if np.any(np.isnan(current_q_matrix)):
-                print(f"  [Worker] WARNING: Input q_matrix for step {i} contains NaN values!")
-            
+            # +++ FIX: Wrap debug prints in a conditional block and fix formatting +++
+            if self.config.get('logging', {}).get('debug_mode', False):
+                print(f"  [Worker] Window Sim Step {i}: Start Time={current_time}, Mean_Latent_Alpha={np.mean(alpha):.4f}")
+                if np.any(np.isnan(current_q_matrix)):
+                    print(f"  [Worker] WARNING: Input q_matrix for step {i} contains NaN values!")
+
             next_q_matrix = self._run_single_step_local(current_q_matrix, alpha, current_time)
             
             if next_q_matrix.size == 0 or np.any(np.isnan(next_q_matrix)):
@@ -155,18 +159,37 @@ class HLMRunner:
         """
         A local, synchronous version of run_single_step for use inside the analysis_worker.
         It now uses .rec files for both input and output.
+        MODIFIED: It now accepts a LATENT alpha_param and transforms it to physical space.
         """
         # Create a unique temporary directory for this specific simulation step
         # to avoid race conditions. We use the process ID to guarantee uniqueness.
         pid = os.getpid()
         run_dir = os.path.join(self.tmp_dir, f"local_run_{pid}")
         os.makedirs(run_dir, exist_ok=True)
-
+ 
         # 1. Create step-specific input files
         prm_path = os.path.join(run_dir, "params.prm")
-        cr_params = np.full((1, self.n_divisions), alpha_param)
-        create_prm_from_division_params(self.hlm_config, self.link_to_division_map, cr_params, [self.cr_param_index], prm_path)
+        
+        # +++ NEW: Transform latent alpha to physical before creating PRM +++
+        # `param_sequence` from `analysis_operator` gives a list of latent alpha vectors.
+        # `alpha_param` here is one of those vectors, shape (n_divisions,).
+        prm_dist_bool = [str(val).lower() == 'true' for val in self.config['parameters']["prm_dist"]]
+        active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
+        
+        # Reshape the latent vector into the 2D shape expected by the transformer
+        # Shape: (n_divisions,) -> (1, n_divisions) for one active parameter
+        latent_alpha_2d = alpha_param.reshape(1, -1)
+        
+        # Perform the transformation
+        physical_alpha_2d = transform_latent_to_physical(
+            self.config['parameters'],
+            latent_alpha_2d,
+            n_divisions=self.n_divisions,
+            active_param_indices=active_param_indices
+        )
 
+        create_prm_from_division_params(self.hlm_config, self.link_to_division_map, physical_alpha_2d, active_param_indices, prm_path)
+ 
         input_rec_path = os.path.join(run_dir, "state.rec")
         write_rec_file(input_rec_path, self.hlm_config['model_num'], self.sorted_link_ids, q_matrix)
 
@@ -207,7 +230,7 @@ class HLMRunner:
                   f"Stderr: {e.stderr}\nStdout: {e.stdout}")
             raise
 
-        # 4. Read .rec output and cleanup
+        # 4. Read .rec output and cleanup 
         output_matrix = parse_rec_file(output_rec_path)
         shutil.rmtree(run_dir, ignore_errors=True)
         return output_matrix

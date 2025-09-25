@@ -1,27 +1,34 @@
 #!/usr/bin/env python
 """
-模型参数敏感性扫描工具 (诊断方向一)
----------------------------------
-本脚本用于系统性地评估HLM模型输出（特别是径流）对降雨校正因子 alpha (即 $Cr$) 的敏感性。
+Parameter Sensitivity Scanning Tool (Diagnosis Direction 1)
+-----------------------------------------------------------
+This script systematically evaluates the sensitivity of the HLM model output
+(specifically streamflow) to the rainfall correction factor alpha (i.e., $Cr$).
 
-工作流程:
-1.  定义一个 alpha 值的扫描范围 (例如从 0.8 到 1.8)。
-2.  为范围内的每一个 alpha 值：
-    a. 使用新DA框架中的 `create_prm_from_division_params` 函数生成一个独立的 .prm 文件。
-    b. 使用新DA框架中的 `_create_single_gbl` 函数生成一个 .gbl 文件，并修改它以输出 .csv 径流文件。
-3.  将所有模拟任务作为一个SGE作业数组提交到HPC集群。
-4.  等待所有模拟完成。
-5.  后处理：
-    a. 读取每个 alpha 值对应的输出 .csv 文件。
-    b. 提取指定观测点的径流过程线。
-    c. 绘制 "alpha vs. 洪峰流量" 关系图。
-    d. 生成一个动画GIF，直观展示径流过程线随 alpha 变化的动态过程。
+IMPORTANT ASSUMPTION:
+This script assumes the alpha parameter is a GLOBAL value applied uniformly
+across all sub-watershed divisions. It is designed to test the overall
+model response to a single parameter change, not division-specific variations.
 
-用法
+Workflow:
+1.  Define a scan range for the alpha parameter (e.g., from 0.8 to 2.8).
+2.  For each alpha value in the range:
+    a. Generate a unique .prm file using the `create_prm_from_division_params`
+       function from the main DA framework.
+    b. Generate a corresponding .gbl file and modify it to output .csv hydrographs.
+3.  Submit all simulation tasks as an SGE job array to the HPC cluster.
+4.  Wait for all simulations to complete.
+5.  Post-process the results for each target gauge specified in the config:
+    a. Read the output .csv file for each alpha value.
+    b. Extract the hydrograph for the target gauge.
+    c. Plot the "alpha vs. Peak Flow" relationship.
+    d. Generate an animated GIF showing the hydrograph's evolution as alpha changes.
+
+Usage
 ~~~~~
     python sensitivity_scan.py DA/config.j2
 
-依赖
+Dependencies
 ~~~~~~~~~~~~
  * numpy, pandas, matplotlib
  * imageio (pip install imageio)
@@ -40,7 +47,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import imageio.v3 as iio
 
-# 从当前DA项目中导入必要的工具函数
+# Import necessary utility functions from the current DA project
 from utils import process_yaml
 from io_ifc import (
     get_ids,
@@ -56,26 +63,26 @@ plt.rcParams.update({
 })
 
 # ────────────────────────────────────────────────────────────────────────────────
-#  文件读取与绘图函数 (与旧脚本基本一致)
+#  File I/O and Plotting Functions
 # ────────────────────────────────────────────────────────────────────────────────
 
 def read_q_series(csv_path: str) -> np.ndarray:
-    """从HLM输出的CSV文件中读取径流数据，返回Numpy数组 [时间步 x 观测点数]"""
+    """Read streamflow data from an HLM output CSV file, return as Numpy array [timesteps x n_gauges]"""
     if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
         return np.empty((0, 0))
     with open(csv_path) as f:
         raw = [ln for ln in f.read().splitlines() if ln.strip()]
-    # 跳过文件头
+    # Skip header lines
     num = re.compile(r"^-?\d")
     while raw and not num.match(raw[0].split(",")[0].strip()):
         raw.pop(0)
     if not raw:
         return np.empty((0, 0))
     df = pd.read_csv(io.StringIO("\n".join(raw)), header=None).dropna(axis=1, how="all")
-    # 如果第一列是时间戳，则丢弃
+    # Drop the first column if it's a timestamp
     if pd.to_numeric(df.iloc[:, 0], errors='coerce').isna().any():
         df = df.iloc[:, 1:]
-    # 如果最后一列是全0或空的（HLM常见问题），则丢弃
+    # Drop the last column if it's all zeros or empty (a common HLM artifact)
     if (df.iloc[:, -1] == 0).all() or df.iloc[:, -1].isnull().all():
         df = df.iloc[:, :-1]
     return df.to_numpy(float, copy=True)
@@ -83,7 +90,7 @@ def read_q_series(csv_path: str) -> np.ndarray:
 
 def make_hydrograph_gif(csv_paths: list[str], alpha_values: list[float], out_gif: str,
                         gauge_idx: int, gauge_name: str) -> None:
-    """为指定观测点生成径流过程线的GIF动画"""
+    """Generate an animated GIF of hydrographs for a specific gauge."""
     frames = []
     y_max = 0.0
     series_list = []
@@ -97,7 +104,7 @@ def make_hydrograph_gif(csv_paths: list[str], alpha_values: list[float], out_gif
         y_max = max(y_max, np.nanmax(q_series))
 
     if y_max == 0:
-        print("⚠️  未找到有效的径流数据 – 跳过GIF生成。")
+        print("⚠️  No valid discharge data found – skipping GIF generation.")
         return
 
     cmap = plt.get_cmap("viridis")
@@ -122,11 +129,11 @@ def make_hydrograph_gif(csv_paths: list[str], alpha_values: list[float], out_gif
         plt.close(fig)
 
     iio.imwrite(out_gif, frames, duration=150, loop=0) # duration in ms
-    print("🎞️  径流GIF动画已保存 ->", out_gif)
+    print(f"🎞️  Hydrograph GIF animation saved -> {os.path.basename(out_gif)}")
 
 
 def create_initial_rec_from_uini(cfg: dict, out_rec_path: str, sorted_link_ids: list):
-    """从 .uini 文件创建一个 .rec 初始状态文件"""
+    """Create a .rec initial state file from a .uini file."""
     initial_uini_path = cfg['hlm_model']['initial_uini']
     with open(initial_uini_path, 'r') as f:
         lines = [line.strip() for line in f.readlines()]
@@ -136,66 +143,61 @@ def create_initial_rec_from_uini(cfg: dict, out_rec_path: str, sorted_link_ids: 
     initial_state_matrix = np.tile(state_values, (n_links, 1))
     
     write_rec_file(out_rec_path, cfg['hlm_model']['model_num'], sorted_link_ids, initial_state_matrix)
-    print(f"创建了所有模拟共用的初始状态文件: {out_rec_path}")
+    print(f"Created common initial state file for all simulations: {out_rec_path}")
 
 # ────────────────────────────────────────────────────────────────────────────────
-#  主驱动函数
+#  Main Driver Function
 # ────────────────────────────────────────────────────────────────────────────────
 
 def main(yaml_name: str):
     cfg = process_yaml(yaml_name)
 
-    # 1) 定义 Alpha 扫描范围
-    # 包含初始均值(1.0)和真值(1.5)附近的值
+    # 1) Define Alpha scan range
     alpha_list = np.linspace(0.8, 2.8, 11).tolist()
     n_run = len(alpha_list)
-    print(f"扫描 {n_run} 个 Alpha 值: {[f'{v:.2f}' for v in alpha_list]}")
+    print(f"Scanning {n_run} Alpha values: {[f'{v:.2f}' for v in alpha_list]}")
 
-    # 2) 设置临时和输出目录
-    tmp_dir = os.path.join(cfg["paths"]["tmp_dir"] + "_Sensitivity_Scan")
-    out_dir = os.path.join(cfg["paths"]["out_dir"] + "_Sensitivity_Scan")
+    # 2) Set up temporary and output directories
+    start_str = cfg['da_settings']['assimilation_window']['start'].split(' ')[0].replace('-', '')
+    end_str = cfg['da_settings']['assimilation_window']['end'].split(' ')[0].replace('-', '')
+    time_span_str = f"{start_str}-{end_str}"
+
+    # +++ FIX: Subfolder name will now only contain the time span +++
+    subfolder_name = f"{time_span_str}"
+
+    base_tmp_dir = cfg["paths"]["tmp_dir"] + "_Sensitivity_Scan"
+    base_out_dir = cfg["paths"]["out_dir"] + "_Sensitivity_Scan"
+
+    # The temporary directory for HPC jobs remains at the top level to keep paths simple
+    tmp_dir = os.path.join(base_tmp_dir)
+    out_dir = os.path.join(base_out_dir, subfolder_name)
     
-    # 3) 清理并创建目录
-    print("正在清理和创建工作目录...")
+    # 3) Clean and create directories
+    print("Cleaning and creating working directories...")
     shutil.rmtree(tmp_dir, ignore_errors=True)
     shutil.rmtree(out_dir, ignore_errors=True)
     os.makedirs(tmp_dir, exist_ok=True)
     os.makedirs(out_dir, exist_ok=True)
 
-    # 4) 准备模型结构和公共文件
-    print("正在准备模型结构和公共文件...")
+    # 4) Prepare model structure and common files
+    print("Preparing model structure and common files...")
     sorted_link_ids = get_ids(cfg['hlm_model'])
     division_to_link_map, link_to_division_map = get_subwatershed(cfg['hlm_model'], sorted_link_ids)
     n_divisions = division_to_link_map.shape[0]
     cr_param_index = cfg['parameters']['prm_names'].index('$Cr$')
 
-    # 复制 meas.sav 并找到目标观测点的索引
+    # Copy the meas.sav file
     meas_sav_path = os.path.join(tmp_dir, "meas.sav")
     shutil.copyfile(cfg["observations"]["link_sav"], meas_sav_path)
-    
-    target_gauge_lid = '5583000' # 下游出口观测站
-    with open(meas_sav_path, 'r') as f:
-        sav_lids = [line.strip() for line in f if line.strip()]
-    try:
-        # 在 .sav 文件中找到目标观测点对应的link ID，再确定其列索引
-        from io_ifc import load_usgs_mapping
-        usgs_map, _, _ = load_usgs_mapping(cfg['observations'])
-        target_link_id_str = str(usgs_map[target_gauge_lid])
-        gauge_idx = sav_lids.index(target_link_id_str)
-        print(f"目标观测点 '{target_gauge_lid}' (Link ID: {target_link_id_str}) 在输出文件的第 {gauge_idx} 列。")
-    except (KeyError, ValueError):
-        print(f"错误：无法在映射或.sav文件中找到目标观测点 {target_gauge_lid}。将使用默认索引 0。")
-        gauge_idx = 0
-        target_gauge_lid = f"Index_{gauge_idx}"
 
 
-    # 创建一个所有模拟共用的初始状态 .rec 文件
+    # Create a common initial state .rec file for all simulations
     init_rec_path = os.path.join(tmp_dir, "init.rec")
     create_initial_rec_from_uini(cfg, init_rec_path, sorted_link_ids)
 
 
-    # 5) 批量为每个 Alpha 值生成 prm 和 gbl 文件
-    print("正在为每个 Alpha 值生成 .prm 和 .gbl 文件...")
+    # 5) Batch generate .prm and .gbl files for each Alpha value
+    print("Generating .prm and .gbl files for each Alpha value...")
     gbl_paths, expected_csv = [], []
     for i, alpha in enumerate(alpha_list):
         run_prefix = f"alpha_{alpha:.3f}"
@@ -203,7 +205,7 @@ def main(yaml_name: str):
         gbl_i = os.path.join(tmp_dir, f"{run_prefix}.gbl")
         csv_i = os.path.join(tmp_dir, f"{run_prefix}.csv")
 
-        # a. 使用新框架的函数创建 .prm 文件
+        # a. Create .prm file using the function from the main framework
         physical_params = np.full((1, n_divisions), alpha)
         create_prm_from_division_params(
             cfg['hlm_model'],
@@ -213,7 +215,7 @@ def main(yaml_name: str):
             prm_i
         )
 
-        # b. 使用新框架的函数创建 .gbl 文件
+        # b. Create .gbl file using the function from the main framework
         gbl_config = cfg['hlm_model'].copy()
         gbl_config.update({
             "time_start": cfg['da_settings']['assimilation_window']['start'],
@@ -227,47 +229,43 @@ def main(yaml_name: str):
             output_gbl_path=gbl_i,
             prm_file_path=prm_i,
             input_rec_path=init_rec_path,
-            output_rec_path=os.path.join(tmp_dir, f"{run_prefix}.rec"), # 临时rec输出，不会被使用
+            output_rec_path=os.path.join(tmp_dir, f"{run_prefix}.rec"), # Temporary .rec output, will not be used
             sav_file_path=meas_sav_path,
             scratch_dir_path=os.path.join(cfg['hlm_model']['scratch_dir'], f"scan_{i}"),
             target_env='login'
         )
         
-        # c. **关键修改**: 修改GBL文件，使其输出CSV而不是REC (已修正格式问题)
+        # c. CRITICAL MODIFICATION: Modify the GBL to output CSV instead of REC
         with open(gbl_i, 'r') as f:
             lines = f.readlines()
         
-        # 使用更鲁棒的逻辑来定位和修改行
-        # 这种方法通过寻找节标题，然后修改其后固定偏移量的行，避免了注释行数变化带来的错误
+        # Use a robust method to locate and modify lines by finding section headers
         new_lines = list(lines)
         for k, line in enumerate(lines):
-            # 定位水文图输出节
+            # Locate hydrograph output section
             if line.strip() == "%Where to put write hydrographs":
-                # 该节的数据行在标题后第2行 (标题 -> 注释 -> 数据行)
+                # The data line is 2 lines below the header
                 if k + 2 < len(new_lines):
                     new_lines[k+2] = f"2 60 {os.path.abspath(csv_i)}\n"
 
-            # 定位状态快照节
+            # Locate snapshot output section
             if line.strip().startswith("%Snapshot information"):
-                # 该节的数据行就在标题后第1行
+                # The data line is 1 line below the header
                 if k + 1 < len(new_lines):
-                    new_lines[k+1] = "0\n" # "0" 表示不输出
+                    new_lines[k+1] = "0\n" # "0" means no snapshot output
 
         with open(gbl_i, 'w') as f:
             f.writelines(new_lines)
 
-        # --- 关键修复：将生成的文件路径添加到列表中 ---
         gbl_paths.append(gbl_i)
         expected_csv.append(csv_i)
 
-    # 6) 检查结果是否已存在，否则提交HPC作业
-    # all_done = all(Path(csv).exists() and Path(csv).stat().st_size > 100 for csv in expected_csv)
-    # 为了调试，我们暂时禁用检查，强制重新运行所有模拟
+    # 6) Check if results already exist, otherwise submit HPC job
     all_done = False
-    print("📢  调试模式：强制重新运行所有HPC模拟...")
+    print("📢  Debug mode: Forcing re-run of all HPC simulations...")
 
     if not all_done:
-        # 编写并提交 SGE 作业数组脚本
+        # Write and submit the SGE job array script
         array_job_path = os.path.join(tmp_dir, "submit_sensitivity_scan.job")
         executable_path = os.path.join(cfg['login_node_root'], 'exec/asynch/bin/asynch')
         with open(array_job_path, "w") as f:
@@ -286,57 +284,80 @@ def main(yaml_name: str):
                     "declare -a gbls=(" + " ".join(gbl_paths) + ")\n"
                     f"mpirun -np {cfg['hlm_model']['num_parallel_slots']} {executable_path} ${{gbls[$ID]}}\n")
 
-        print("正在提交HPC作业数组...")
+        print("Submitting HPC job array...")
         os.system(f"qsub {array_job_path}")
 
-        # 等待所有输出CSV文件生成
+        # Wait for all output CSV files to be generated
         tic = time.time()
         while True:
             done_count = sum(1 for csv in expected_csv if Path(csv).exists() and Path(csv).stat().st_size > 100)
             if done_count == n_run:
                 break
-            sys.stdout.write(f"\r⏳  等待模拟完成... ({done_count}/{n_run}) - {int(time.time()-tic)} s")
+            sys.stdout.write(f"\r⏳  Waiting for simulations to complete... ({done_count}/{n_run}) - {int(time.time()-tic)} s")
             sys.stdout.flush()
             time.sleep(30)
-        print("\n✅  所有模拟已完成。")
+        print("\n✅  All simulations have completed.")
     else:
-        print("✅  所有结果CSV文件均已存在 – 跳过模拟。")
+        print("✅  All result CSV files already exist – skipping simulation.")
 
-    # 7) 后处理：提取洪峰并写入CSV
-    print("正在后处理结果...")
-    peaks = []
-    for alpha, csv_file in zip(alpha_list, expected_csv):
-        q_arr = read_q_series(csv_file)
-        if q_arr.size == 0 or q_arr.shape[1] <= gauge_idx:
-            print(f"⚠️  在 {os.path.basename(csv_file)} 中无有效数据或找不到观测点列。")
-            peaks.append([alpha, np.nan])
+    print("\n--- Starting Post-Processing for Target Gauges ---")
+    target_gauges = cfg.get('visualization', {}).get('sensitivity_gauges', [])
+    if not target_gauges:
+        print("⚠️  'sensitivity_gauges' list not found in config.j2 under visualization section. Skipping post-processing.")
+        return
+
+    # Load mappings once before the loop
+    from io_ifc import load_usgs_mapping
+    usgs_map, _, _ = load_usgs_mapping(cfg['observations'])
+    with open(meas_sav_path, 'r') as f:
+        sav_lids = [line.strip() for line in f if line.strip()]
+
+    for target_gauge_id in target_gauges:
+        print(f"\n--- Processing Gauge: {target_gauge_id} ---")
+        try:
+            target_link_id_str = str(usgs_map[target_gauge_id])
+            gauge_idx = sav_lids.index(target_link_id_str)
+            print(f"  > Target gauge '{target_gauge_id}' (Link ID: {target_link_id_str}) corresponds to column {gauge_idx} in output files.")
+        except (KeyError, ValueError):
+            print(f"  > ⚠️ ERROR: Could not find target gauge {target_gauge_id} in mappings or .sav file. Skipping this gauge.")
             continue
-        peak_val = np.nanmax(q_arr[:, gauge_idx])
-        peaks.append([alpha, peak_val])
 
-    peak_df = pd.DataFrame(peaks, columns=["Alpha", "Q_peak"])
-    peak_df.to_csv(os.path.join(out_dir, "alpha_peak_curve.csv"), index=False)
+        # 7) Post-process: Extract peak flows and write to CSV
+        peaks = []
+        for alpha, csv_file in zip(alpha_list, expected_csv):
+            q_arr = read_q_series(csv_file)
+            if q_arr.size == 0 or q_arr.shape[1] <= gauge_idx:
+                print(f"  > ⚠️ No valid data or gauge column in {os.path.basename(csv_file)}.")
+                peaks.append([alpha, np.nan])
+                continue
+            peak_val = np.nanmax(q_arr[:, gauge_idx])
+            peaks.append([alpha, peak_val])
 
-    # 8) 绘图：Alpha vs. 洪峰流量
-    plt.figure()
-    plt.plot(peak_df["Alpha"], peak_df["Q_peak"], "o-", lw=2, markersize=8)
-    plt.xlabel("Rainfall Correction Factor Alpha ($Cr$)")
-    plt.ylabel(f"Peak Discharge (m³/s) @ Gauge {target_gauge_lid}")
-    plt.title("Sensitivity of Peak Discharge to Alpha Parameter")
-    plt.grid(True, alpha=0.5, linestyle='--')
-    plt.tight_layout()
-    fig_png = os.path.join(out_dir, "alpha_peak_curve.png")
-    plt.savefig(fig_png, dpi=200)
-    print("📊  Sensitivity curve plot saved ->", fig_png)
-    plt.close()
-    
-    # 9) 制作径流过程线GIF
-    gif_path = os.path.join(out_dir, "alpha_hydrograph_animation.gif")
-    make_hydrograph_gif(expected_csv, alpha_list, gif_path, gauge_idx=gauge_idx, gauge_name=target_gauge_lid)
+        peak_df = pd.DataFrame(peaks, columns=["Alpha", "Q_peak"])
+        csv_path = os.path.join(out_dir, f"alpha_peak_curve_gauge_{target_gauge_id}.csv")
+        peak_df.to_csv(csv_path, index=False)
+        print(f"  > Peak data saved -> {os.path.basename(csv_path)}")
+
+        # 8) Plot: Alpha vs. Peak Flow
+        plt.figure()
+        plt.plot(peak_df["Alpha"], peak_df["Q_peak"], "o-", lw=2, markersize=8)
+        plt.xlabel("Rainfall Correction Factor Alpha ($Cr$)")
+        plt.ylabel(f"Peak Discharge (m³/s)")
+        plt.title(f"Sensitivity of Peak Discharge to Alpha @ Gauge {target_gauge_id}")
+        plt.grid(True, alpha=0.5, linestyle='--')
+        plt.tight_layout()
+        fig_png = os.path.join(out_dir, f"alpha_peak_curve_gauge_{target_gauge_id}.png")
+        plt.savefig(fig_png, dpi=200)
+        print(f"  > 📊 Sensitivity curve plot saved -> {os.path.basename(fig_png)}")
+        plt.close()
+        
+        # 9) Generate hydrograph GIF
+        gif_path = os.path.join(out_dir, f"alpha_hydrograph_animation_gauge_{target_gauge_id}.gif")
+        make_hydrograph_gif(expected_csv, alpha_list, gif_path, gauge_idx=gauge_idx, gauge_name=target_gauge_id)
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print(f"用法: python {os.path.basename(__file__)} <config.j2>")
+        print(f"Usage: python {os.path.basename(__file__)} <config.j2>")
         sys.exit(1)
     main(sys.argv[1])

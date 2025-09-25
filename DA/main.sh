@@ -47,6 +47,3 @@ eval $CMD
 
 echo "----------------------------------------------------"
 echo "Script execution finished."
-
-# # Alpha scan job to plot Alpha-hydrograph curve
-# ~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/DA/sensitivity_scan.py ~/DA/2025_EKI/DA/config.j2

@@ -26,13 +26,19 @@ da_settings:
   using_simulated_data: true
   synthetic_obs_path: "out/DA_run/csv/synthetic_observations.csv"
 
-  # Time window for the entire data assimilation run
+  # --- Time window for the entire data assimilation run ---
+  # IMPORTANT: The start and end time MUST be within the same calendar year. 
+  # This is because the asynch solver (gbl) cannot cross year boundaries.
+  {% set year = "2019" %}
+  {% set start_date = year + "-03-30 00:00" %}
+  {% set end_date = year + "-05-07 23:00" %}
+  {# {% set year = "2021" %}
+  {% set start_date = year + "-08-12 00:00" %}
+  {% set end_date = year + "-08-17 23:00" %}
+  {% set end_date = year + "-09-01 12:00" %} #}
   assimilation_window:
-    {# start: "2019-03-30 00:00"
-    end: "2019-05-07 23:00" #}
-    start: "2021-08-12 00:00"
-    end: "2021-08-17 23:00"
-    {# end: "2021-09-01 12:00" #}
+    start: "{{ start_date }}"
+    end: "{{ end_date }}"
 
   # --- Process Noise (Q) Settings ---
   # Std dev of the alpha parameter random walk. Represents uncertainty in how alpha evolves. 
@@ -44,10 +50,10 @@ da_settings:
   max_param_history: 50
 
   # Variance for the real-time observation y_t
-  real_time_obs_error_var: 0.01 #10.0
+  real_time_obs_error_var: 1.0 #0.01 #10.0
 
   # A single variance value to be used for all historical/smoother observations
-  smoother_obs_error_var: 0.01 #15.0
+  smoother_obs_error_var: 1.0 #0.01 #15.0
 
 ###################################################
 #                 Section: Parameters
@@ -56,11 +62,27 @@ parameters:
   # Used if generating simulated data to serve as "truth"
   truth_alpha_value: 1.5 
   
-  # Mean and std for initializing the parameter ensemble at t=0
-  {# initial_mean: 1.0 #}
-  initial_mean: 1.0
-  initial_std: 0.2
-  
+  # --- Latent Space Transformation Settings ---
+  # The desired mean value in PHYSICAL space for the initial ensemble
+  initial_physical_mean: 1.0
+  # Standard deviation for the INITIAL latent ensemble (e.g., 1.0 for broad exploration)
+  sig_P0: 3.0    #1.0
+
+  # Lower and upper bounds for each PHYSICAL parameter. Crucial for the transformation.
+  # The order MUST match 'prm_names'. Only the last value ($Cr$) is used.
+  prm_lb: [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+    0.01]
+  prm_ub: [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
+    5.0]
+
+  # A list of booleans indicating which parameters are active for transformation.
+  # Only the last one ($Cr$) is set to "True".
+  prm_dist: [
+    "False", "False", "False", "False", "False", "False", "False", "False", 
+    "False", "False", "False", "False", "True"]
+
   # This list MUST match the order of parameters in your template .prm file.
   # HLMRunner uses this to find the correct column index for '$Cr$'.
   prm_names: [
@@ -75,7 +97,8 @@ hlm_model:
   model_num: '602'
   
   # Paths to model structure and forcing data
-  rain_dir: hlm_data/Sensor_data/Rainfall_Sangamon_river/MRMS/2021/
+  # +++ DYNAMIC PATH: The rain directory is now constructed based on the 'year' variable defined above +++
+  rain_dir: "hlm_data/Sensor_data/Rainfall_Sangamon_river/MRMS/{{ year }}/"
   rvr: hlm_data/structure/sangamon.rvr
   prm: hlm_data/parameter_templates/sangamon_v6.prm
   evapo: hlm_data/Sensor_data/Temp&Evap_monthly/modis_2021.mon
@@ -124,6 +147,13 @@ observations:
 #               Section: Visualization
 ###################################################
 visualization:
+  # +++ NEW: List of USGS gauges to generate sensitivity analysis plots for +++
+  sensitivity_gauges: [                              
+    "5578100", "5578000", "5579630", "5576500", "5580950", "5577500", "5576250",
+    "5576000", "5580000", "5582000", "5576193", "5570910", "5583000", "5578250", "5576090",
+    "5573540", "5578500", "5579725", "5579500", "5572000"
+  ]
+
   # Path to the shapefile for map visualization
   shapefile_path: ../sangamon/link_maps/network.shp
   # ID of the gauge at the most downstream point for map highlighting

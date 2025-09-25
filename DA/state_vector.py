@@ -38,7 +38,9 @@ class StateVector:
     @property
     def full_vector(self) -> np.ndarray:
         """Returns the complete augmented state vector as a single numpy array."""
-        return np.concatenate([self.q, self.alpha_r_history])
+        # +++ FIX: Flatten the 2D alpha_r_history in a defined order ('F') +++
+        # 'F' (Fortran) order flattens column by column, grouping each time step's divisions together.
+        return np.concatenate([self.q, self.alpha_r_history.flatten('F')])
 
     def __repr__(self) -> str:
         return (f"StateVector(q_shape={self.q.shape}, "
@@ -77,8 +79,14 @@ class StateVector:
             
             # Slice the flat vector back into its constituent parts
             physical_state = full_vector[:n_physical_states]
-            param_history = full_vector[n_physical_states:]
-            
+            param_history_flat = full_vector[n_physical_states:]
+
+            # +++ CORRECT FIX: Reshape the flattened param_history back to 2D +++
+            # The flat vector is ordered by divisions first, then time.
+            # So we reshape to (n_divisions, n_param_history) and then transpose.
+            n_divisions = param_history_flat.shape[0] // n_param_history
+            param_history = param_history_flat.reshape(n_divisions, n_param_history).T
+
             # Basic validation
             if len(param_history) != n_param_history:
                 raise ValueError(

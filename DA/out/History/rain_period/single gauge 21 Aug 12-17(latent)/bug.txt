@@ -1,0 +1,4 @@
+The convergence of ensembles are not stable. They tend to explode up.
+I'm not sure is it because of 
+1. the initialization(prior) is too strong. I will try using initialization of alpha near 1. Note that since the q_t are finalized based on the imprecise alpha, the error in the intial steps cannot be fixed effectively.
+2. The forecast operator is not robust, since now we are implementing only strategy A, which only predict q_t using lastest alpha, but not corrected history. Therefore, there exists accumulated error in q_t due to imprecise alpha.

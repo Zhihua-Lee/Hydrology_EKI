@@ -8,6 +8,9 @@ import yaml
 import pandas as pd
 import logging
 from jinja2 import Environment, FileSystemLoader
+# +++ NEW: Import the transformation function +++
+from latent import transform_latent_to_physical
+
 
 ## Utility functions
 
@@ -115,6 +118,21 @@ def save_da_step_outputs(config, t, forecast_ensemble, analysis_ensemble, hlm_ru
     """
     out_dir_csv = os.path.join(config['paths']['out_dir'], 'csv')
     
+    # +++ NEW: Helper function to transform latent alphas to physical for saving +++
+    def transform_alphas_for_saving(latent_alphas: np.ndarray, n_divisions: int) -> np.ndarray:
+        # latent_alphas shape: (n_ens, n_history_len * n_divisions)
+        # For saving, we often deal with arrays of alphas.
+        prm_dist_bool = [str(val).lower() == 'true' for val in config['parameters']["prm_dist"]]
+        active_param_indices = [i for i, is_active in enumerate(prm_dist_bool) if is_active]
+        n_active_params = len(active_param_indices)
+
+        # Reshape for transformer: (n_ens, n_divisions) -> (n_active_params, n_divisions, n_ens)
+        latent_alphas_3d = latent_alphas.T.reshape(n_active_params, n_divisions, -1)
+        physical_alphas_3d = transform_latent_to_physical(
+            config['parameters'], latent_alphas_3d, n_divisions=n_divisions, active_param_indices=active_param_indices
+        )
+        return physical_alphas_3d.reshape(n_active_params, -1).T # Reshape back
+
     # --- 1. Save Mean Physical State (q_a) from the analysis ensemble ---
     all_q_a = np.array([vec.q for vec in analysis_ensemble])
     mean_q_a = np.mean(all_q_a, axis=0)
@@ -125,31 +143,47 @@ def save_da_step_outputs(config, t, forecast_ensemble, analysis_ensemble, hlm_ru
     logging.info(f"Saved mean physical state for t={t}.")
 
     # --- 2. Save Forecast Alpha (mean of alpha_r,t before update) ---
-    all_alpha_f = np.array([vec.get_current_parameter() for vec in forecast_ensemble])
+    all_latent_alpha_f = np.array([vec.get_current_parameter() for vec in forecast_ensemble])
+    all_alpha_f = transform_alphas_for_saving(all_latent_alpha_f, hlm_runner.n_divisions)
     mean_alpha_f = np.mean(all_alpha_f, axis=0)
-    alpha_f_df = pd.DataFrame({'forecast_alpha_mean': [mean_alpha_f]}, index=[t])
+    # Save mean over all divisions
+    alpha_f_df = pd.DataFrame({'forecast_alpha_mean': [np.mean(mean_alpha_f)]}, index=[t])
     alpha_f_df.index.name = 'time_step'
     alpha_f_filename = os.path.join(out_dir_csv, 'forecast_alpha_mean_timeseries.csv')
     alpha_f_df.to_csv(alpha_f_filename, mode='a', header=not os.path.exists(alpha_f_filename))
 
     # --- 3. Save Real-Time Optimal Alpha (mean of alpha_r,t after update) ---
-    all_alpha_a_current = np.array([vec.get_current_parameter() for vec in analysis_ensemble])
+    all_latent_alpha_a_current = np.array([vec.get_current_parameter() for vec in analysis_ensemble])
+    all_alpha_a_current = transform_alphas_for_saving(all_latent_alpha_a_current, hlm_runner.n_divisions)
     mean_alpha_a_current = np.mean(all_alpha_a_current, axis=0)
-    alpha_a_df = pd.DataFrame({'analysis_alpha_mean': [mean_alpha_a_current]}, index=[t])
+    # Save mean over all divisions
+    alpha_a_df = pd.DataFrame({'analysis_alpha_mean': [np.mean(mean_alpha_a_current)]}, index=[t])
     alpha_a_df.index.name = 'time_step'
     alpha_a_filename = os.path.join(out_dir_csv, 'analysis_alpha_mean_timeseries_realTimeOptimal.csv')
     alpha_a_df.to_csv(alpha_a_filename, mode='a', header=not os.path.exists(alpha_a_filename))
 
     # --- 4. Save the full Smoothed Alpha Window Snapshot ---
     # Calculate the mean of the entire parameter history window
-    all_alpha_histories = np.array([vec.alpha_r_history for vec in analysis_ensemble])
-    mean_alpha_history = np.mean(all_alpha_histories, axis=0)
+    all_latent_alpha_histories = np.array([vec.alpha_r_history for vec in analysis_ensemble])
+    n_ens, n_history, n_divs = all_latent_alpha_histories.shape
+
+    # Transform each time step in the history for each ensemble member
+    # Reshape from (n_ens, n_hist, n_divs) to (n_ens, n_hist * n_divs)
+    all_latent_flat = all_latent_alpha_histories.reshape(n_ens, -1)
+    all_physical_flat = transform_alphas_for_saving(all_latent_flat, n_history * n_divs)
+    # Reshape back to (n_ens, n_hist, n_divs)
+    all_physical_histories = all_physical_flat.reshape(n_ens, n_history, n_divs)
+
+    # Now calculate the mean of the physical values
+    mean_alpha_history = np.mean(all_physical_histories, axis=0)
+    # For saving, take the mean across all divisions for each time lag
+    mean_alpha_history_across_divs = np.mean(mean_alpha_history, axis=1)
     
     # Create a DataFrame for the window snapshot
     history_lags = np.arange(len(mean_alpha_history))
     window_df = pd.DataFrame({
         'history_lag': history_lags,
-        'smoothed_alpha_mean': mean_alpha_history
+        'smoothed_alpha_mean': mean_alpha_history_across_divs
     })
     window_filename = os.path.join(out_dir_csv, f'analysis_alpha_window_t{t:03d}.csv')
     window_df.to_csv(window_filename, index=False)
@@ -170,7 +204,7 @@ def save_da_step_outputs(config, t, forecast_ensemble, analysis_ensemble, hlm_ru
 
     # Create a new DataFrame for the current update step's data
     new_column_name = f'corrected_at_t{t}'
-    new_data_df = pd.DataFrame({new_column_name: mean_alpha_history}, index=history_timesteps)
+    new_data_df = pd.DataFrame({new_column_name: mean_alpha_history_across_divs}, index=history_timesteps)
     new_data_df.index.name = 'time_step'
     
     # --- BUG FIX: Make the join robust against reruns ---

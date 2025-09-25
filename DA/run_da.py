@@ -118,17 +118,20 @@ def main(config_path):
     logging.info("Generating initial ensemble...")
     num_ensembles = da_settings.get('num_ensembles', 100)
     
+    # +++ NEW: Import the latent space creation function +++
+    from latent import create_latent
+
     # B. Create a diverse ensemble for the parameter history (alpha_r)
     # At t=0, the parameter history has length 1. It will grow dynamically.
-    param_config = config.get('parameters', {})
-    initial_param_mean = param_config.get('initial_mean', 1.0)
-    initial_param_std = param_config.get('initial_std', 0.2)
-    
-    initial_alpha_ensemble = np.random.normal(
-        loc=initial_param_mean,
-        scale=initial_param_std,
-        size=(num_ensembles, 1) # History length is 1 at t=0
-    )
+    # +++ NEW: Generate initial alpha ensemble in LATENT space +++
+    # The parameter is applied at the division level. We use the hlm_runner's
+    # division_to_link_map to get the correct number of divisions.
+    # create_latent returns (n_active_params, n_divisions, n_ens), 3d means 3 dims
+    initial_latent_alpha_3d = create_latent(config['parameters'], hlm_runner.division_to_link_map, num_ensembles)
+    # Since we only have one active parameter ($Cr$), we take the first slice and transpose.
+    # Shape becomes (n_divisions, n_ens) -> transpose -> (n_ens, n_divisions)
+    initial_alpha_ensemble = initial_latent_alpha_3d[0].T
+
     logging.info(f"Created initial parameter ensemble with shape {initial_alpha_ensemble.shape}.")
 
     # C. Create a perturbed ensemble for the initial physical state (q) using a "warm start"
@@ -162,7 +165,8 @@ def main(config_path):
 
     # E. Combine into the initial analysis ensemble for t=-1 (conceptually)
     analysis_ensemble = [
-        StateVector(physical_state=initial_q_ensemble[i], param_history=initial_alpha_ensemble[i])
+        # +++ FIX: Reshape param_history to be 2D: (1, n_divisions) +++
+        StateVector(physical_state=initial_q_ensemble[i], param_history=initial_alpha_ensemble[i].reshape(1, -1))
         for i in range(num_ensembles)
     ]
     logging.info(f"Initial ensemble of {num_ensembles} StateVectors created.")

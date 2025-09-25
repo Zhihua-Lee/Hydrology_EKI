@@ -17,6 +17,24 @@ def convert_logical(str_list: list) -> list:
     return [json.loads(i.lower()) for i in str_list]
     
 
+def bounded_to_unbounded(y: np.ndarray, lb: float, ub: float) -> np.ndarray:
+    """
+    Inverse transform: convert bounded physical values to unbounded latent values.
+
+    Args:
+        y (np.ndarray): Input array of bounded values in the range [lb, ub].
+        lb (float): Lower bound of the bounded range.
+        ub (float): Upper bound of the bounded range.
+
+    Returns:
+        np.ndarray: An array of unbounded latent values.
+    """
+    if np.any((y < lb) | (y > ub)):
+        # Handle cases where input is slightly out of bounds due to precision
+        y = np.clip(y, lb, ub)
+    y_on_0_1 = (y - lb) / (ub - lb)
+    return np.arctanh(2 * y_on_0_1 - 1)
+
 def create_latent(test_dict: dict, division_to_link_map: np.ndarray, ens: int) -> np.ndarray:
     """
     Initializes the latent parameter ensemble (X) for the EKI process.
@@ -38,9 +56,23 @@ def create_latent(test_dict: dict, division_to_link_map: np.ndarray, ens: int) -
     n_divisions = division_to_link_map.shape[0]
     n_active_params = sum(include_parameters)
 
-    # Generate all random values from a standard normal distribution at once.
-    # The distribution is centered at 0 with a standard deviation from the config.
-    latent_mat = np.random.normal(0, test_dict['sig_P0'], (n_active_params, n_divisions, ens))
+    # +++ NEW: Center the initial latent distribution around a desired physical mean (e.g., 1.0) +++
+    initial_physical_mean = test_dict.get('initial_physical_mean', 1.0)
+    latent_mat = np.zeros((n_active_params, n_divisions, ens))
+    
+    active_idx = 0
+    for i, is_active in enumerate(include_parameters):
+        if is_active:
+            lb = float(test_dict['prm_lb'][i])
+            ub = float(test_dict['prm_ub'][i])
+            
+            # Find the latent mean that corresponds to the desired physical mean
+            latent_mean = bounded_to_unbounded(np.array([initial_physical_mean]), lb, ub)[0]
+            
+            # Generate random values from a normal distribution centered at the new latent mean
+            latent_mat[active_idx, :, :] = np.random.normal(latent_mean, test_dict['sig_P0'], (n_divisions, ens))
+            active_idx += 1
+
 
     if np.isnan(latent_mat).any():
         print("Warning: NaN found in the initial latent matrix created by create_latent!")

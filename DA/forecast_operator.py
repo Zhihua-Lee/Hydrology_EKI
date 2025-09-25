@@ -58,14 +58,18 @@ class ForecastOperator:
         start_time = pd.to_datetime(self.config['da_settings']['assimilation_window']['start']) + pd.Timedelta(hours=t)
 
         for state_vec_analysis in analysis_ensemble:
+            # state_vec_analysis.get_current_parameter() returns the latest alpha history entry.
+            # Shape is (n_divisions,)
+            current_alpha_vector = state_vec_analysis.get_current_parameter()
+            n_divisions = current_alpha_vector.shape[0]
+
             # Evolve parameter state via random walk: alpha_{r,t+1} = alpha_{r,t} + w_t
-            current_alpha = state_vec_analysis.get_current_parameter()
-            noise = np.random.normal(0, self.alpha_noise_std)
-            next_alpha = current_alpha + noise
+            noise = np.random.normal(0, self.alpha_noise_std, size=n_divisions)
+            next_alpha_vector = current_alpha_vector + noise
             
             # The StateVector stores the discharge vector, which we pass to the worker.
             q_ensemble_list.append(state_vec_analysis.q)
-            alpha_ensemble_list.append(next_alpha)
+            alpha_ensemble_list.append(next_alpha_vector)
         
         # Convert lists to numpy arrays for efficient serialization
         q_ensemble = np.array(q_ensemble_list)
@@ -112,10 +116,10 @@ class ForecastOperator:
             # Add process noise to the physical state (multiplicative noise) to represent model error
             next_q_discharge = np.maximum(0, next_q_discharge * np.random.normal(1.0, self.q_noise_std, size=next_q_discharge.shape))
 
-            next_alpha = alpha_ensemble[i] # Get the corresponding alpha
+            next_alpha_vector = alpha_ensemble[i] # Get the corresponding alpha vector
             
             # --- 2. Update and assemble the new parameter history ---
-            new_alpha_history = np.insert(state_vec_analysis.alpha_r_history, 0, next_alpha)
+            new_alpha_history = np.insert(state_vec_analysis.alpha_r_history, 0, next_alpha_vector, axis=0)
             
             # Trim the history to maintain the maximum window size (N_max).
             # We need to store one extra history point because the analysis window simulation
