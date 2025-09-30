@@ -56,23 +56,25 @@ def create_latent(test_dict: dict, division_to_link_map: np.ndarray, ens: int) -
     n_divisions = division_to_link_map.shape[0]
     n_active_params = sum(include_parameters)
 
-    # +++ NEW: Center the initial latent distribution around a desired physical mean (e.g., 1.0) +++
+    # +++ MODIFIED: Initialize all particles at the desired physical mean, then add noise +++
     initial_physical_mean = test_dict.get('initial_physical_mean', 1.0)
     latent_mat = np.zeros((n_active_params, n_divisions, ens))
-    
+
     active_idx = 0
     for i, is_active in enumerate(include_parameters):
         if is_active:
             lb = float(test_dict['prm_lb'][i])
             ub = float(test_dict['prm_ub'][i])
-            
+
             # Find the latent mean that corresponds to the desired physical mean
             latent_mean = bounded_to_unbounded(np.array([initial_physical_mean]), lb, ub)[0]
-            
-            # Generate random values from a normal distribution centered at the new latent mean
-            latent_mat[active_idx, :, :] = np.random.normal(latent_mean, test_dict['sig_P0'], (n_divisions, ens))
-            active_idx += 1
 
+            # First, set all particles for all divisions to this central latent value
+            base_latent_mat = np.full((n_divisions, ens), latent_mean)
+            # Then, add zero-centered noise to create the ensemble spread
+            noise = np.random.normal(0, test_dict['sig_P0'], (n_divisions, ens))
+            latent_mat[active_idx, :, :] = base_latent_mat + noise
+            active_idx += 1
 
     if np.isnan(latent_mat).any():
         print("Warning: NaN found in the initial latent matrix created by create_latent!")

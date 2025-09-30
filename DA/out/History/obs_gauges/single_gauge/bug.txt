@@ -1,0 +1,6 @@
+I tuned the sig_r and initialization covariance, but the EKI still breaks down and tend to overestimate the alpha.
+I am wondering is it because of the correspondence of gauges and alphas.
+-> I will test using a single gauge.
+Still the algorithm fails.
+
+To determine whether the inaccuracy is due to the forecast of q or the lack of precision in the analysis information, I will first try predicting q using the actual alpha.

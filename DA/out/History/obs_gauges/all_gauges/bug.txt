@@ -1,0 +1,3 @@
+I tuned the sig_r and initialization covariance, but the EKI still breaks down and tend to overestimate the alpha.
+I am wondering is it because of the correspondence of gauges and alphas.
+I will test using a single gauge.
