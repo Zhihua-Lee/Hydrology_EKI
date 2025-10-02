@@ -1,0 +1,5 @@
+-> To determine whether the inaccuracy is due to the forecast of q or the lack of precision in the analysis information, I will first try predicting q using the actual alpha.
+
+A: I found that when forecast is using the actual alpha, the analysis is perfect, even if using a single gauge.
+
+However, I notice that the corrected alpha window is not so perfect util it get rid of the '-1' moment value. Probably there is something wrong with the initialization of that ahpha?

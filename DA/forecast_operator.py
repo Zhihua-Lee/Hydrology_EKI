@@ -57,13 +57,22 @@ class ForecastOperator:
         alpha_ensemble_list = []
         start_time = pd.to_datetime(self.config['da_settings']['assimilation_window']['start']) + pd.Timedelta(hours=t)
 
-        # +++ NEW: Check for the truth override flag +++
+        # +++ MODIFIED: Check for truth override and handle latent space conversion +++
         debug_use_truth = self.config.get('da_settings', {}).get('forecast_with_truth_alpha', False)
         if debug_use_truth:
             print("📢  DEBUG MODE: Forecasting with TRUE alpha value.")
-            truth_alpha = self.config.get('parameters', {}).get('truth_alpha_value')
-            if truth_alpha is None:
+            truth_physical_alpha = self.config.get('parameters', {}).get('truth_alpha_value')
+            if truth_physical_alpha is None:
                 raise ValueError("Debug flag 'forecast_with_truth_alpha' is true, but 'truth_alpha_value' is not defined in parameters.")
+            
+            # Import the inverse transformation function
+            from latent import bounded_to_unbounded
+            params_config = self.config['parameters']
+            prm_dist_bool = [str(val).lower() == 'true' for val in params_config["prm_dist"]]
+            cr_param_orig_index = prm_dist_bool.index(True) # Find the index of the active parameter
+            lb = float(params_config['prm_lb'][cr_param_orig_index])
+            ub = float(params_config['prm_ub'][cr_param_orig_index])
+            truth_latent_alpha = bounded_to_unbounded(np.array([truth_physical_alpha]), lb, ub)[0]
 
         for state_vec_analysis in analysis_ensemble:
             # state_vec_analysis.get_current_parameter() returns the latest alpha history entry.
@@ -71,14 +80,14 @@ class ForecastOperator:
             current_alpha_vector = state_vec_analysis.get_current_parameter()
             n_divisions = current_alpha_vector.shape[0]
 
-            if debug_use_truth:
-                # Override with a vector of the true alpha value
-                next_alpha_vector = np.full(n_divisions, truth_alpha)
+            if debug_use_truth: 
+                # Override with a vector of the TRUE LATENT alpha value
+                next_alpha_vector = np.full(n_divisions, truth_latent_alpha)
             else:
                 # Evolve parameter state via random walk: alpha_{r,t+1} = alpha_{r,t} + w_t
                 noise = np.random.normal(0, self.alpha_noise_std, size=n_divisions)
                 next_alpha_vector = current_alpha_vector + noise
-
+            
             # The StateVector stores the discharge vector, which we pass to the worker.
             q_ensemble_list.append(state_vec_analysis.q)
             alpha_ensemble_list.append(next_alpha_vector)
