@@ -27,15 +27,17 @@ class DataHandler:
         # Read the constant states from the centralized config to ensure consistency.
         constant_states = np.array(self.config['hlm_model']['constant_physical_states'])
         
+        # With the V3 algorithm, the main loop starts at t=1, and the earliest state
+        # requested will be for t=0. This check is now a safeguard for unexpected logic errors.
         if t < 0:
-            # For the very first re-run window, return a zero state matrix.
-            return np.zeros((self.n_links, 5))
+            raise ValueError(f"Error: Requested historical state for a negative time index t={t}, which is not allowed.")
         
         discharge_vector = self.analysis_states_history.get(t)
         if discharge_vector is None:
-             # This should not happen in a normal run, but as a fallback:
-             print(f"Warning: Historical state for t={t} not found. Returning zero matrix.")
-             return np.zeros((self.n_links, 5))
+             # CRITICAL FIX: Do not silently fail by returning a zero matrix.
+             # This indicates a critical failure in the DA logic (e.g., a state was not
+             # stored correctly in a previous step). The program must stop.
+             raise KeyError(f"Fatal: Historical analysis state for time step t={t} not found in DataHandler history.")
         
         # Assemble the full state matrix for the HLM simulation
         full_matrix = np.zeros((self.n_links, 5))
@@ -55,8 +57,11 @@ class DataHandler:
             np.ndarray: A flattened 1D array of observations from t-N_t to t.
                         Shape: ((N_t + 1) * n_gauges,).
         """
+        # V3 LOGIC FIX: The number of observation points must match the number of
+        # simulation steps in the analysis window. A simulation with N_t parameters
+        # produces N_t states to be compared against observations.
         N_t = min(t_current, self.max_param_history)
-        start_idx = t_current - N_t
+        start_idx = t_current - N_t + 1
         end_idx = t_current + 1
 
         if self.n_gauges == 0:

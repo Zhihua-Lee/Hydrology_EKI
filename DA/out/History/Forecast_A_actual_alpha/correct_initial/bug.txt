@@ -1,0 +1,12 @@
+To determine whether the inaccuracy is due to the forecast of q or the lack of precision in the analysis information, I will first try predicting q using the actual alpha.
+
+A: I found that when forecast is using the actual alpha, the analysis is perfect, even if using a single gauge.
+
+-> However, I notice that the corrected alpha window is not so perfect util it get rid of the '-1' moment value. Probably there is something wrong with the initialization of that ahpha?
+
+A: The bug is that the initialization was constrained by the q_{-1}(uini) and alpha{-1}, and alpha{-1} shouldn't exist because we don't propagate to q_{-1}(uini); further, to propagate to q_{-1}(uini), we were setting q_{-1} to be zero;
+I fixed this in the formulation and also in the code; The main idea is to separate the initialization of the q_0 and alpha_1 from the rest DA steps;
+Now I'm testing the performance without such errors.
+The convergence is faster than the wrong initialization.
+
+Next, I will go back and test if the correct initialization afftect the convergence when forecast_with_truth_alpha=false.

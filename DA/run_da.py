@@ -127,16 +127,6 @@ def main(config_path):
     # The parameter is applied at the division level. We use the hlm_runner's
     # division_to_link_map to get the correct number of divisions.
     # create_latent returns (n_active_params, n_divisions, n_ens), 3d means 3 dims
-    initial_latent_alpha_3d = create_latent(config['parameters'], hlm_runner.division_to_link_map, num_ensembles)
-    # Since we only have one active parameter ($Cr$), we take the first slice and transpose.
-    # Shape becomes (n_divisions, n_ens) -> transpose -> (n_ens, n_divisions)
-    initial_alpha_ensemble = initial_latent_alpha_3d[0].T
-
-    logging.info(f"Created initial parameter ensemble with shape {initial_alpha_ensemble.shape}.")
-
-    # C. Create a perturbed ensemble for the initial physical state (q) using a "warm start"
-    # We load a spun-up, realistic initial DISCHARGE state from a template file.
-    # This avoids numerical instability associated with a "cold start" (near-zero state).
     initial_state_path = config['hlm_model']['initial_uini']
     logging.info(f"Loading warm-start initial discharge state from: {initial_state_path}")
     with open(initial_state_path, 'r') as f:
@@ -156,44 +146,59 @@ def main(config_path):
     # Broadcast this single initial discharge value to all links in the model.
     base_discharge_state = np.full(n_links, initial_discharge_value)
 
-    # D. Create the discharge ensemble by adding small perturbations to the realistic base state.
+    # --- V3 Algorithm: Stage 0 & 1 ---
+    logging.info("--- V3 Stage 0: Initializing state at t=0 ---")
+    # 1. Generate q_0 prior from .uini file by adding perturbations.
     # The StateVector will only store this discharge vector, not the full state matrix.
     perturbation_scale = 0.05
     perturbations = np.random.normal(loc=1.0, scale=0.1, size=(num_ensembles, n_links))
     initial_q_ensemble = np.maximum(0, base_discharge_state * perturbations)
     logging.info(f"Created initial physical state (discharge) ensemble with shape {initial_q_ensemble.shape}.")
 
-    # E. Combine into the initial analysis ensemble for t=-1 (conceptually)
-    analysis_ensemble = [
-        # +++ FIX: Reshape param_history to be 2D: (1, n_divisions) +++
-        StateVector(physical_state=initial_q_ensemble[i], param_history=initial_alpha_ensemble[i].reshape(1, -1))
+    # 2. Simplified analysis for q_0 (prior is treated as posterior) and store it.
+    analysis_q0_ensemble = initial_q_ensemble
+    mean_q0_for_storage = np.mean(analysis_q0_ensemble, axis=0)
+    # The history part is None because we only store the physical state.
+    data_handler.store_analysis_state(0, StateVector(mean_q0_for_storage, None))
+    logging.info("Stored mean of initial physical state for t=0 in DataHandler.")
+
+    logging.info("--- V3 Stage 1: First forecast from t=0 to t=1 ---")
+    # 1. Generate the first parameter ensemble to be estimated: alpha_1
+    initial_latent_alpha_3d = create_latent(config['parameters'], hlm_runner.division_to_link_map, num_ensembles)
+    initial_alpha1_ensemble = initial_latent_alpha_3d[0].T # Shape: (n_ens, n_divisions)
+    logging.info(f"Created initial parameter ensemble for alpha_1 with shape {initial_alpha1_ensemble.shape}.")
+
+    # 2. Assemble a temporary analysis ensemble at t=0 to kick off the first forecast.
+    # The parameter history for each member contains only alpha_1.
+    analysis_ensemble_t0 = [
+        StateVector(physical_state=analysis_q0_ensemble[i], param_history=initial_alpha1_ensemble[i].reshape(1, -1))
         for i in range(num_ensembles)
     ]
-    logging.info(f"Initial ensemble of {num_ensembles} StateVectors created.")
 
+    # 3. Run the first forecast to get X_{1|0}, which will be the input for the main loop at t=1.
+    forecast_ensemble = forecast_op.run_forecast(analysis_ensemble_t0, t=0)
+    logging.info("Completed first forecast step to generate state for t=1.")
 
-    # 3. Main Sequential Loop (Time-stepping)
+    # 4. Main Sequential Loop (Time-stepping)
     da_window = da_settings.get('assimilation_window', {})
     start_time = da_window.get('start')
     end_time = da_window.get('end')
     time_index = pd.date_range(start=start_time, end=end_time, freq='H') # Assuming hourly steps
     num_time_steps = len(time_index)
-    logging.info(f"Starting time loop from {start_time} to {end_time} ({num_time_steps} steps).")
+    logging.info(f"Starting main loop from t=1 to t={num_time_steps-1}.")
     
     max_param_history = da_settings.get('max_param_history', 5)
-    for t in range(num_time_steps):
-        logging.info(f"--- Processing time step {t} ({time_index[t]}) ---")
-
-        # a. Forecast Step
-        logging.info("Performing forecast step...")
-        forecast_ensemble = forecast_op.run_forecast(analysis_ensemble, t)
-        
-        # b. Analysis (Update) Step
-        logging.info("Performing analysis step...")
+    # --- V3 Algorithm: Stage 2 ---
+    # The loop now starts at t=1, as t=0 is handled during initialization.
+    for t in range(1, num_time_steps):
+        # a. Analysis (Update) Step
+        # The forecast_ensemble (X_{t|t-1}) is ready from the previous step (or initialization).
+        logging.info(f"--- Analysis Step at t={t} ({time_index[t]}) ---")
         y_obs_window = data_handler.get_observations_for_window(t)
         logging.info(f"Augmented state vector length: {forecast_ensemble[0].full_vector.shape[0]}, Observation window vector length: {y_obs_window.shape[0]}")
 
         # The analysis operator H(X_t) is called within the update step.
+        # This returns the analysis matrix X_a = X_{t|t}.
         analysis_matrix_X_a = kalman_updater.run_update_step(
             forecast_ensemble=forecast_ensemble,
             y_obs_window=y_obs_window,
@@ -201,24 +206,25 @@ def main(config_path):
             t_current=t,
         )
         
-        # Convert the raw analysis_matrix back to a list of StateVector objects.
-        # The length of the parameter history grows with t until it reaches the max.
-        # This logic must match the history length limit in the ForecastOperator,
-        # which is max_param_history + 1.
-        current_param_history_len = min(t + 2, max_param_history + 1)
+        # Convert the raw analysis_matrix back to a list of StateVector objects (X_{t|t}).
+        # At time t, the forecast from t-1 had a history of length min(t, max+1).
+        # The analysis result will have the same history length.
+        current_param_history_len = min(t, max_param_history + 1)
         analysis_ensemble = StateVector.reconstruct_ensemble_from_matrix(
             analysis_matrix_X_a,
             n_physical_states=n_links,
             n_param_history=current_param_history_len
         )
         
-        # c. Store the new analysis state for future re-runs
+        # b. Store the new analysis state for future re-runs
         # We store the mean of the ensemble as the "best guess" historical state.
         mean_analysis_q = np.mean([vec.q for vec in analysis_ensemble], axis=0)
-        mean_analysis_state = StateVector(mean_analysis_q, None) # History part not needed for storage
+        mean_analysis_state = StateVector(mean_analysis_q, None)  # History part not needed for storage
         data_handler.store_analysis_state(t, mean_analysis_state)
+        logging.info(f"Stored mean analysis state for t={t}.")
 
-        # d. Save comprehensive DA step outputs
+        # c. Save comprehensive DA step outputs
+        logging.info(f"Saving DA outputs for step t={t}...")
         save_da_step_outputs(
             config=config, t=t,
             forecast_ensemble=forecast_ensemble,
@@ -226,7 +232,10 @@ def main(config_path):
             hlm_runner=hlm_runner
         )
 
-        logging.info(f"Completed and stored analysis for time step {t}.")
+        # d. Forecast Step to prepare for the *next* time step (t+1)
+        forecast_ensemble = forecast_op.run_forecast(analysis_ensemble, t)
+
+        logging.info(f"--- Completed main loop for t={t} ---")
 
     logging.info("Sequential Data Assimilation run finished.")
 

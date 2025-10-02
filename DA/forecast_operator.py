@@ -48,7 +48,8 @@ class ForecastOperator:
         Returns:
             List[StateVector]: The ensemble of forecast state vectors for time t+1 (X_{t+1|t}).
         """
-        print(f"\n--- Starting Forecast Step for Time {t} ---")
+        # V3 LOGIC CLARIFICATION: This step forecasts the state FOR t+1, starting FROM t.
+        print(f"\n--- Forecast Step from t={t} to t={t+1} ---")
         n_ens = len(analysis_ensemble)
 
         # --- STAGE 1: Gather data for all ensemble members ---

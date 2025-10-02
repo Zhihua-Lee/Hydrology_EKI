@@ -114,8 +114,15 @@ class KalmanUpdate:
         pert_vec = np.random.normal(0, 1, (obs_size, ensemble_size))
         y_pert = y_obs + np.sqrt(R_diag)[:, np.newaxis] * pert_vec
         d = y_pert - Y_f
-        M = (Y_prime.T / R_diag) @ Y_prime + (ensemble_size - 1) * np.eye(ensemble_size)
-        update_ens_space = np.linalg.solve(M, (Y_prime.T / R_diag) @ d)
+
+        # --- ROBUSTNESS FIX for Broadcasting ---
+        # The original `(Y_prime.T / R_diag)` is fragile when obs_dim is 1.
+        # We rewrite the operation Y'ᵀR⁻¹Y' as Y'ᵀ @ (R⁻¹Y'), which can be implemented
+        # with robust row-wise broadcasting: Y_prime.T @ (Y_prime / R_diag[:, np.newaxis])
+        M = Y_prime.T @ (Y_prime / R_diag[:, np.newaxis]) + (ensemble_size - 1) * np.eye(ensemble_size)
+        
+        # Apply the same robust broadcasting to the Y'ᵀR⁻¹d term.
+        update_ens_space = np.linalg.solve(M, Y_prime.T @ (d / R_diag[:, np.newaxis]))
         update = X_prime @ update_ens_space
         X_a = X_f + update
         return X_a

@@ -40,15 +40,21 @@ class AnalysisOperator:
         Returns:
             dict: A dictionary containing all necessary info for the HPC worker.
         """
+        # V3 LOGIC:
+        # N_t is the number of steps in the re-run window.
+        # At t=1, N_t=1. At t=2, N_t=2, etc., up to the max history length.
         N_t = min(t_current, self.max_param_history)
-        initial_q_for_sim = self.data_handler.get_historical_analysis_state(t_current - N_t - 1)
-        param_sequence = forecast_vec.alpha_r_history[:N_t+1][::-1]
+        # The re-run simulation starts from the physical state at t_current - N_t.
+        start_q_time_index = t_current - N_t
+        initial_q_for_sim = self.data_handler.get_historical_analysis_state(start_q_time_index)
+        # The parameter sequence has length N_t. It's the N_t most recent parameters.
+        param_sequence = forecast_vec.alpha_r_history[:N_t][::-1]
 
         # Conditionally print debug info based on config flag
         if self.config.get('logging', {}).get('debug_mode', False):
-            print(f"DEBUG (t={t_current}): N_t={N_t}, history_len={len(forecast_vec.alpha_r_history)}, param_sequence_len={len(param_sequence)}")
+            print(f"DEBUG (t={t_current}): N_t={N_t}, start_q_t={start_q_time_index}, history_len={len(forecast_vec.alpha_r_history)}, param_sequence_len={len(param_sequence)}")
 
-        start_time_window = pd.to_datetime(self.config['da_settings']['assimilation_window']['start']) + pd.Timedelta(hours=(t_current - N_t - 1))
+        start_time_window = pd.to_datetime(self.config['da_settings']['assimilation_window']['start']) + pd.Timedelta(hours=start_q_time_index)
         
         # This dictionary contains all info a worker needs for one window simulation
         job_info = {
