@@ -1,21 +1,37 @@
-asynch/
-Inverse_Problem/tmp/
-.ipynb_checkpoints/
+# Python
 __pycache__/
-*.pyc
-*.npy
-tmp/
-asynch/
-Inverse_Problem/tmp/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter
 .ipynb_checkpoints/
-__pycache__/
-*.pyc
-*.npy
-*.npy
-Inverse_Problem/hlm_data/Sensor_data/Rainfall_Sangamon_river
+
+# Environments
+.venv/
+venv/
+env/
+.conda/
+
+# Generated outputs and scratch space
+**/out/
+**/tmp/
+**/scratch/
+
+# Large data and archives
+Inverse_Problem/hlm_data/Simulated_data/Rainfall_Sangamon_river/
+Inverse_Problem/hlm_data/Sensor_data/Rainfall_Sangamon_river/
 sangamon/usgs-basins.geojson
-sangamon/link_maps/hills.shp
-sangamon/link_maps/network.dbf
-sangamon/link_maps/network.shp
-*.tif
 *.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tif
+*.tiff
+*.npy
+*.npz
+
+# Local external builds
+asynch/
+exec/
+external/

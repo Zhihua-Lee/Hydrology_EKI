@@ -1,38 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# --- Configuration ---
-# Set to true to skip the EKI run and only generate visualizations from existing output.
-# Set to false to run the full EKI experiment.
-# VISUALIZE_ONLY=true
-VISUALIZE_ONLY=false
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_PATH="${1:-$SCRIPT_DIR/config.j2}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+VISUALIZE_ONLY="${VISUALIZE_ONLY:-false}"
 
-# IDAS or Argon doesn't allow user to run .sh files via ".\xxx.sh" directly;
-# So just copy them to terminal in Argon and run
+CMD=("$PYTHON_BIN" "$SCRIPT_DIR/eki_test.py" "$CONFIG_PATH")
 
-# (optional)activate the virtual environment in python
-clear
-cd ~/virtenvs/Hydro_py3108/bin/
-source ./activate
-cd ~/DA/2025_EKI/Inverse_Problem/
-
-# Check qstat -u zli333 before submitting jobs, if there are remaining, use qdel to delete them
-qstat -u zli333
-
-# Check available slots before running code, if the slots available is less than num_ensemble * num_parallel_slots, then we need to set num_parallel_slots to be smaller; you should be able to monitor the job status also using this command
-qstat -f -q IFC -u zli333
-
-# Modify the parameters in `config.j2` as desired
-
-# --- Execution ---
-CMD="~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/eki_test.py ~/DA/2025_EKI/Inverse_Problem/config.j2"
-
-if [ "$VISUALIZE_ONLY" = true ]; then
-  CMD="$CMD --visualize-only"
+if [ "$VISUALIZE_ONLY" = "true" ]; then
+  CMD+=("--visualize-only")
 fi
 
-# Submit the job to Argon to run
-echo -e "\nExecuting command: $CMD"
-eval $CMD
-
-# Cr scan job to plot Cr-hydrograph curve
-# ~/virtenvs/Hydro_py3108/bin/python ~/DA/2025_EKI/Inverse_Problem/exploration/cr_scan.py ~/DA/2025_EKI/Inverse_Problem/config.j2
+echo "Executing: ${CMD[*]}"
+"${CMD[@]}"
