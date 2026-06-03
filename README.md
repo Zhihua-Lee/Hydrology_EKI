@@ -96,6 +96,11 @@ Representative Sangamon experiment outputs are kept in `examples/results/`.
 They are included only as lightweight project illustrations; full experiment
 outputs should be regenerated locally or published as release assets.
 
+The hydrograph animation shows how the simulated ensemble evolves across EKI
+iterations at a representative outlet gauge.
+
+![Hydrograph assimilation animation](examples/results/sangamon_hydrograph_assimilation.gif)
+
 ![Final Cr map](examples/results/sangamon_final_cr_map.png)
 
 ![Hydrograph performance map](examples/results/sangamon_hydrograph_metric_map.png)
