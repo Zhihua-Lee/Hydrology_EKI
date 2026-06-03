@@ -2,12 +2,11 @@
                      Section: EKI                 
 ###################################################}
 
-# Absolute path to the project root on the HPC cluster where jobs will execute.                                       │
-# This is used to dynamically locate executables (e.g., asynch) for job scripts.                                      │
-project_root: "/Users/zli333/DA/2025_EKI"  
-# Absolute path to the Python interpreter on the HPC cluster.
-# This is crucial for running worker scripts (like prm generation) in the correct environment.
-hpc_python_path: "/Users/zli333/virtenvs/Hydro_py3108/bin/python"
+# Path to the project root on the machine where jobs will execute.
+# Update this before running on a local workstation or HPC cluster.
+project_root: "/path/to/Hydrology_EKI"
+# Python interpreter used by worker scripts.
+hpc_python_path: "python"
 # A fixed integer to ensure reproducibility of random operations.
 random_seed: 42
 
@@ -91,7 +90,7 @@ time_end: 2021-09-01 23:00                         # Simulation/assimilation end
 parallel_argument: smp                             # option: 'orte', 'smp'
 num_parallel_slots: 8                              # number of slots assigned to each simulation(ensemble), 
                                                    # small -> slow, big -> not accessible from Argon
-scratch_dir: "/nfsscratch/Users/zli333/test"       # HPC High-performance temporary directory for model scratch work(HLM simulation)
+scratch_dir: "tmp/hpc_scratch"                    # Scratch directory for HLM simulations
 
 
 {% if using_simulated_data %}# using simulated data
@@ -137,7 +136,6 @@ tmp_dir: tmp/RealSensor_Experiments/{{ folder_suffix }}/
 
 # Path to the shapefile for map visualization
 shapefile_path: ../sangamon/link_maps/network.shp
-
 
 
 
